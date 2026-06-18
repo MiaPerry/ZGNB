@@ -22,6 +22,8 @@ export default function Backtest() {
     let code = tsCode.trim().toUpperCase();
     if (/^\d{6}$/.test(code)) {
       code = code.startsWith('6') ? `${code}.SH` : `${code}.SZ`;
+    } else if (/^[A-Z]{1,5}$/.test(code)) {
+      code = `${code}.US`;
     }
     setTsCode(code);
     mutation.mutate();

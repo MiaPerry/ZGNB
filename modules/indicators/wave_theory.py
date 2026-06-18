@@ -40,10 +40,19 @@ def _find_recent_low(klines: list[DailyData], window: int = 5) -> tuple[int, flo
 
 
 def _count_limit_up(klines: list[DailyData], start_idx: int) -> int:
-    """统计从 start_idx 到今日的涨停次数（pct_chg >= 9.9%）"""
+    """统计从 start_idx 到今日的涨停/大涨次数
+
+    A股：涨停 = pct_chg >= 9.9%（10%涨跌停限制）
+    美股：大涨 = pct_chg >= 5%（无涨跌停限制，用5%作为强势信号）
+    """
+    # 根据代码后缀判断市场，确定阈值
+    threshold = 9.9  # A股默认
+    if klines and klines[0].ts_code.endswith(".US"):
+        threshold = 5.0  # 美股无涨跌停，用5%作为大涨信号
+
     count = 0
     for k in klines[start_idx:]:
-        if k.pct_chg >= 9.9:
+        if k.pct_chg >= threshold:
             count += 1
     return count
 
@@ -80,6 +89,8 @@ def detect_three_waves(klines: list[DailyData]) -> dict:
     建仓波：底部起涨 25%-50%，无涨停或 ≤1 次，阳线占比 > 60%，日均涨幅温和
     拉升波：涨幅 > 50% 或 20 日涨幅 > 30%，涨停 ≥2 次，快速脱离
     冲刺波：涨幅 > 100%，频繁涨停，高位加速
+
+    注意：涨停阈值自动适配市场（A股9.9%，美股5%）
 
     返回：
     {

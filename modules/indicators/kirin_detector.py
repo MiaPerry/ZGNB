@@ -146,16 +146,25 @@ def _detect_volume_price_rise(klines: list[DailyData]) -> bool:
     return recent_5_close > prev_5_close and recent_5_vol > prev_5_vol
 
 
+def _get_limit_up_threshold(klines: list[DailyData]) -> float:
+    """根据市场获取涨停阈值：A股9.9%，美股5%"""
+    if klines and klines[0].ts_code.endswith(".US"):
+        return 5.0
+    return 9.9
+
+
 def _has_limit_up(klines: list[DailyData], days: int = 20) -> bool:
-    """最近 days 日是否有涨停"""
+    """最近 days 日是否有涨停/大涨"""
     segment = klines[-days:] if len(klines) >= days else klines
-    return any(k.pct_chg >= 9.9 for k in segment)
+    threshold = _get_limit_up_threshold(klines)
+    return any(k.pct_chg >= threshold for k in segment)
 
 
 def _count_limit_up(klines: list[DailyData], days: int = 20) -> int:
-    """最近 days 日涨停次数"""
+    """最近 days 日涨停/大涨次数"""
     segment = klines[-days:] if len(klines) >= days else klines
-    return sum(1 for k in segment if k.pct_chg >= 9.9)
+    threshold = _get_limit_up_threshold(klines)
+    return sum(1 for k in segment if k.pct_chg >= threshold)
 
 
 def detect_kirin_stage(klines: list[DailyData]) -> dict:

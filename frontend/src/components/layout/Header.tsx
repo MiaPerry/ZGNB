@@ -43,6 +43,8 @@ export default function Header() {
     let tsCode = code.toUpperCase();
     if (/^\d{6}$/.test(tsCode)) {
       tsCode = tsCode.startsWith('6') ? `${tsCode}.SH` : `${tsCode}.SZ`;
+    } else if (/^[A-Z]{1,5}$/.test(tsCode)) {
+      tsCode = `${tsCode}.US`;
     }
     addSearchHistory(tsCode);
     navigate(`/stock/${tsCode}`);
@@ -71,7 +73,7 @@ export default function Header() {
               onChange={(e) => setInput(e.target.value)}
               onFocus={() => setHistoryOpen(true)}
               onBlur={() => setTimeout(() => setHistoryOpen(false), 150)}
-              placeholder="输入股票代码，如 600487 或 600487.SH (⌘K)"
+              placeholder="输入代码，如 600487 / AAPL / 600487.SH (⌘K)"
               className="w-72 rounded border border-border bg-bg-primary px-3 py-1.5 text-sm text-text-primary placeholder-text-muted outline-none focus:border-accent-gold transition-colors"
             />
             {historyOpen && searchHistory.length > 0 && (

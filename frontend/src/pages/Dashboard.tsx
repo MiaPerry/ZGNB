@@ -28,6 +28,8 @@ export default function Dashboard() {
     let tsCode = code;
     if (/^\d{6}$/.test(tsCode)) {
       tsCode = tsCode.startsWith('6') ? `${tsCode}.SH` : `${tsCode}.SZ`;
+    } else if (/^[A-Z]{1,5}$/.test(tsCode)) {
+      tsCode = `${tsCode}.US`;
     }
     navigate(`/stock/${tsCode}`);
   };
