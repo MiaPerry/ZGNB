@@ -19,9 +19,16 @@ import time
 import sqlite3
 import datetime
 import argparse
+import requests
 
 from dotenv import load_dotenv
 load_dotenv(override=True)
+
+# 创建带自定义 UA 的 session，避免 Yahoo Finance 限流
+_session = requests.Session()
+_session.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+})
 
 # ── 美股龙头股列表 ──
 # (ticker, name, sector)
@@ -83,14 +90,27 @@ US_SECTOR_LEADERS = [
 ]
 
 
-def fetch_us_kline(ticker: str, days: int):
-    """用 yfinance 拉取美股 K 线数据"""
+def fetch_us_kline(ticker: str, days: int, max_retries: int = 3):
+    """用 yfinance Ticker API 拉取美股 K 线数据（带重试 + 自定义 session）"""
     import yfinance as yf
 
-    end = datetime.date.today()
-    start = end - datetime.timedelta(days=days * 2)  # 多拉一些覆盖休市日
+    df = None
+    period = f"{days}d" if days <= 365 else "2y"
 
-    df = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=False)
+    for attempt in range(max_retries):
+        try:
+            tk = yf.Ticker(ticker, session=_session)
+            df = tk.history(period=period, auto_adjust=False)
+            if df is not None and len(df) > 0:
+                break
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait = (attempt + 1) * 5  # 5s, 10s, 15s 递增等待
+                print(f"    请求受限，等待 {wait}s 后重试 ({attempt+1}/{max_retries})...")
+                time.sleep(wait)
+            else:
+                print(f"    重试 {max_retries} 次仍失败: {e}")
+                return []
 
     if df is None or len(df) == 0:
         return []
@@ -229,7 +249,7 @@ def main():
             success += 1
             print(f"  [{i+1}/{len(stocks)}] {ts_code} {name} — {inserted} 条K线")
 
-            time.sleep(0.3)  # 避免请求过快
+            time.sleep(2)  # 避免触发 Yahoo Finance 限流
 
         except Exception as e:
             print(f"  [{i+1}/{len(stocks)}] {ts_code} {name} — 失败: {e}")
