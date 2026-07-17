@@ -229,12 +229,11 @@ class DataSyncer:
 
         try:
             self._rate_limit("daily_kline")
-            df = ts.pro_bar(
+            # 使用 pro.daily 直接拉取不复权日线，避免 adj_factor 接口限频（免费账户1次/小时）
+            df = self.pro.daily(
                 ts_code=ts_code,
                 start_date=start_date,
                 end_date=end_date,
-                adj="qfq",
-                api=self.pro,
             )
 
             if df is None or len(df) == 0:

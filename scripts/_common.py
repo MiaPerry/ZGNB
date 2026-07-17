@@ -23,7 +23,7 @@ def load_watchlist() -> list[str]:
     """
     path = os.environ.get("STOCKS_JSON") or str(PROJECT_ROOT / "data" / "stocks_final.json")
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             items = json.load(f)
     except FileNotFoundError:
         logger.error(f"自选股文件不存在: {path}")
