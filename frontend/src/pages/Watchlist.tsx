@@ -72,7 +72,7 @@ export default function Watchlist() {
             type="text"
             value={newCode}
             onChange={(e) => setNewCode(e.target.value)}
-            placeholder="股票代码，如 600487.SH"
+            placeholder="股票代码，如 AAPL.US"
             className="min-w-0 flex-1 basis-48 rounded border border-border bg-bg-primary px-3 py-1.5 text-sm text-text-primary placeholder-text-muted outline-none focus:border-accent-gold"
           />
           <input

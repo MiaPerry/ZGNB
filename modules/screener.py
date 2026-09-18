@@ -57,13 +57,13 @@ class MarketStatus:
 
 
 def get_all_stocks() -> list[dict]:
-    """获取所有股票基本信息"""
+    """获取所有股票基本信息（美股分支：仅获取美股）"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
         SELECT ts_code, name, industry, market
         FROM stock_basic
-        WHERE market IN ('主板', '创业板', '科创板')
+        WHERE market = '美股'
         ORDER BY ts_code
     """)
     stocks = [dict(row) for row in cursor.fetchall()]
@@ -788,13 +788,13 @@ def get_market_status() -> MarketStatus:
     """
     today = datetime.now().strftime("%Y%m%d")
 
-    # 获取沪深300成分股简单评估
+    # 获取美股龙头评估市场状态
     conn = get_db_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
         SELECT ts_code FROM stock_basic
-        WHERE market IN ('主板')
+        WHERE market = '美股'
         LIMIT 100
     """)
     stocks = [row["ts_code"] for row in cursor.fetchall()]

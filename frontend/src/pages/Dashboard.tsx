@@ -46,7 +46,7 @@ export default function Dashboard() {
             type="text"
             value={searchCode}
             onChange={(e) => setSearchCode(e.target.value)}
-            placeholder="输入股票代码开始分析，如 600487"
+            placeholder="输入股票代码开始分析，如 AAPL"
             className="w-full rounded-xl border border-border/60 bg-bg-secondary/80 backdrop-blur-md px-5 py-4 text-base text-text-primary placeholder-text-muted outline-none focus:border-accent-gold/70 focus:ring-4 focus:ring-accent-gold/10 transition-all shadow-xl"
           />
           <button
