@@ -1,10 +1,11 @@
 """
-A 股一键批量同步服务
+美股/港股一键批量同步服务（us 分支）
 
-- 从 stock_basic 与 daily_kline 的并集动态收集当前库内 A 股名单
-- 按北京时间计算查询上界（18:00 后允许当天，周末回退）
+- 从 stock_basic 与 daily_kline 的并集动态收集当前库内美股/港股名单（.US/.HK）
+- 按各市场时区计算查询上界（美东 / 香港，收盘后允许当天，周末回退）
 - 单工作线程后台执行，重复提交返回同一任务
-- 写入前通过 SQLite backup API 备份，限流/网络错误分级重试，鉴权错误立即终止
+- 写入前通过 SQLite backup API 备份，限流/网络错误分级重试
+- 日线走 Yahoo Chart API（经 Clash 代理），指标重算走本地计算，无需 TUSHARE_TOKEN
 """
 
 import logging
@@ -21,24 +22,35 @@ from modules.database import get_connection, get_db_path
 
 logger = logging.getLogger(__name__)
 
-# A 股代码后缀（不含美股 .US / 港股 .HK 等）
-_A_SHARE_SUFFIXES = (".SH", ".SZ", ".BJ")
+# 美股 / 港股代码后缀（不含 A 股 .SH / .SZ / .BJ）
+_US_HK_SUFFIXES = (".US", ".HK")
 
-# 收盘后查询边界：18:00（北京时间）之后允许查询当天完整日线
-_CLOSE_HOUR = 18
+# 各市场相对 UTC 的偏移小时数（美东取夏令时 EDT=-4；香港 +8）
+_MARKET_OFFSETS = {"US": -4, "HK": 8}
+# 各市场“数据可用”小时（当地时间收盘后留出缓冲）
+_MARKET_CLOSE_HOUR = {"US": 17, "HK": 17}
 
 # 错误分类关键字
-_RATE_LIMIT_KEYWORDS = ("最多访问", "限频", "频繁", "too many", "rate limit", "exceed")
+_RATE_LIMIT_KEYWORDS = ("最多访问", "限频", "频繁", "too many", "rate limit", "exceed", "429")
 _AUTH_KEYWORDS = ("token", "权限", "未授权", "unauthorized", "forbidden", "401", "403")
-_NETWORK_KEYWORDS = ("timeout", "timed out", "connection", "网络", "unreachable", "reset")
+_NETWORK_KEYWORDS = ("timeout", "timed out", "connection", "网络", "unreachable", "reset", "proxy")
 
 
-def _is_a_share(ts_code: str) -> bool:
-    return ts_code.upper().endswith(_A_SHARE_SUFFIXES)
+def _is_us_hk(ts_code: str) -> bool:
+    return ts_code.upper().endswith(_US_HK_SUFFIXES)
 
 
-def collect_a_share_codes() -> list[str]:
-    """当前库内全部 A 股代码：stock_basic 与 daily_kline 并集，去重排序"""
+def _market_of(ts_code: str) -> str:
+    up = ts_code.upper()
+    if up.endswith(".US"):
+        return "US"
+    if up.endswith(".HK"):
+        return "HK"
+    return "OTHER"
+
+
+def collect_us_hk_codes() -> list[str]:
+    """当前库内全部美股/港股代码：stock_basic 与 daily_kline 并集，去重排序"""
     with get_connection() as conn:
         rows = conn.execute(
             """
@@ -47,19 +59,21 @@ def collect_a_share_codes() -> list[str]:
             SELECT ts_code FROM daily_kline
             """
         ).fetchall()
-    codes = {row[0] for row in rows if row[0] and _is_a_share(row[0])}
+    codes = {row[0] for row in rows if row[0] and _is_us_hk(row[0])}
     return sorted(codes)
 
 
-def compute_query_end_date(now: datetime) -> str:
+def compute_market_end_date(beijing_now: datetime, market: str) -> str:
     """
-    计算 Tushare 查询上界（北京时间）
+    计算某市场的查询上界（输入为北京时间的 naive datetime）
 
-    - 18:00 后允许查询当天完整日线
-    - 18:00 前查询前一天
+    - 换算到市场当地时间，收盘可用小时后允许查询当天，否则查前一天
     - 结果落在周末则回退到周五；节假日由数据源返回结果体现
     """
-    day = now.date() if now.hour >= _CLOSE_HOUR else (now - timedelta(days=1)).date()
+    utc = beijing_now - timedelta(hours=8)
+    local = utc + timedelta(hours=_MARKET_OFFSETS.get(market, 8))
+    close_hour = _MARKET_CLOSE_HOUR.get(market, 17)
+    day = local.date() if local.hour >= close_hour else (local - timedelta(days=1)).date()
     while day.weekday() >= 5:  # 5=周六 6=周日
         day -= timedelta(days=1)
     return day.strftime("%Y%m%d")
@@ -82,11 +96,36 @@ def classify_error(exc: Exception) -> str:
 
 
 class SyncConfigError(Exception):
-    """同步配置缺失（如 TUSHARE_TOKEN 未配置）"""
+    """同步配置缺失（保留以兼容路由层错误处理）"""
 
 
 class _AbortTask(Exception):
     """任务级终止（如鉴权失败），不再处理后续股票"""
+
+
+# ==================== Yahoo 数据源适配器 ====================
+
+
+class YahooSyncer:
+    """把 Yahoo 日线拉取 + 本地指标计算适配为同步服务所需的 syncer 接口"""
+
+    def __init__(self, session=None):
+        self._session = session
+        self._indicator_syncer = None
+
+    def sync_daily_kline(self, ts_code, start_date=None, end_date=None, raise_on_error=False) -> int:
+        from modules.yahoo_sync import sync_us_daily
+
+        # sync_us_daily 在请求/解析失败时始终抛异常，由服务分级重试
+        return sync_us_daily(ts_code, start_date, end_date, session=self._session)
+
+    def sync_indicator_cache(self, ts_code, days=120) -> int:
+        # 指标基于库内 K 线本地计算，不依赖 Tushare 网络；非 jnb 模式下无 token 也可构造
+        if self._indicator_syncer is None:
+            from modules.data_sync import DataSyncer
+
+            self._indicator_syncer = DataSyncer()
+        return self._indicator_syncer.sync_indicator_cache(ts_code, days=days)
 
 
 # ==================== 任务快照 ====================
@@ -138,8 +177,8 @@ def backup_database(dest_path: Path) -> Path:
 # ==================== 批量同步服务 ====================
 
 
-class AShareSyncService:
-    """A 股一键批量同步：单工作线程后台执行，重复提交返回同一任务"""
+class USStockSyncService:
+    """美股/港股一键批量同步：单工作线程后台执行，重复提交返回同一任务"""
 
     def __init__(
         self,
@@ -160,7 +199,7 @@ class AShareSyncService:
         self._max_attempts = max_attempts
 
         self._lock = threading.Lock()
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="a-share-sync")
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="us-sync")
         self._snapshot = SyncTaskSnapshot()
         self._future = None
 
@@ -168,7 +207,6 @@ class AShareSyncService:
 
     def submit(self) -> SyncTaskSnapshot:
         """提交同步任务；已有运行中的任务时直接返回当前任务快照"""
-        self._ensure_config()
         with self._lock:
             if self._snapshot.status == "running":
                 return self._copy_snapshot()
@@ -211,25 +249,16 @@ class AShareSyncService:
             for key, value in fields.items():
                 setattr(self._snapshot, key, value)
 
-    def _ensure_config(self):
-        import os
-
-        # 仅在需要自建真实同步器时检查配置；测试注入同步器时不检查
-        if self._syncer is None and not os.environ.get("TUSHARE_TOKEN"):
-            raise SyncConfigError("缺少 TUSHARE_TOKEN 配置，请先在 .env 中配置后再同步")
-
     def _get_syncer(self):
         if self._syncer is None:
-            from modules.data_sync import DataSyncer
-
-            self._syncer = DataSyncer()
+            self._syncer = YahooSyncer()
         return self._syncer
 
     def _run(self):
         try:
             self._run_inner()
         except Exception as e:  # 兜底：任何未预期异常都必须落到快照
-            logger.exception("A 股批量同步任务异常终止")
+            logger.exception("美股/港股批量同步任务异常终止")
             self._update(
                 status="failed",
                 phase="done",
@@ -238,20 +267,20 @@ class AShareSyncService:
             )
 
     def _run_inner(self):
-        codes = collect_a_share_codes()
+        codes = collect_us_hk_codes()
         self._update(total=len(codes))
         if not codes:
             self._update(
                 status="completed",
                 phase="done",
-                message="当前库中没有可同步的 A 股",
+                message="当前库中没有可同步的美股/港股",
                 finished_at=datetime.now().isoformat(timespec="seconds"),
             )
             return
 
         # 写入前备份；失败则停止，不碰数据
         try:
-            backup_database(self._backup_dir / "a-share-pre-sync.db")
+            backup_database(self._backup_dir / "us-hk-pre-sync.db")
         except Exception as e:
             self._update(
                 status="failed",
@@ -262,11 +291,12 @@ class AShareSyncService:
             return
 
         syncer = self._get_syncer()
-        end_date = compute_query_end_date(self._now())
+        now = self._now()
         aborted = None
 
         for code in codes:
             self._update(current_code=code, phase="sync")
+            end_date = compute_market_end_date(now, _market_of(code))
             try:
                 outcome = self._sync_one(syncer, code, end_date)
             except _AbortTask as e:
@@ -396,14 +426,14 @@ class AShareSyncService:
 
 # ==================== 服务单例 ====================
 
-_service: AShareSyncService | None = None
+_service: USStockSyncService | None = None
 _service_lock = threading.Lock()
 
 
-def get_a_share_sync_service() -> AShareSyncService:
-    """获取全局同步服务单例（任务状态驻留后端内存，单 API 进程部署）"""
+def get_a_share_sync_service() -> USStockSyncService:
+    """获取全局同步服务单例（名称保留以兼容路由；us 分支同步美股/港股）"""
     global _service
     with _service_lock:
         if _service is None:
-            _service = AShareSyncService()
+            _service = USStockSyncService()
         return _service

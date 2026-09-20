@@ -48,7 +48,7 @@ export default function SyncButton() {
             ? `正在${PHASE_LABELS[snapshot?.phase ?? 'idle']}${
                 snapshot?.current_code ? `：${snapshot.current_code}` : ''
               }`
-            : '同步当前库中全部 A 股的日线与技术指标'
+            : '同步当前库中全部美股/港股的日线与技术指标'
         }
         className={`flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs transition-colors ${
           running

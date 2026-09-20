@@ -1,0 +1,156 @@
+"""
+Yahoo Finance 美股/港股日线同步适配器（us 分支专用）
+
+- 通过 Yahoo Chart API 拉取日线，经 Clash 代理访问
+- 代码映射：指数（SPX/DJI/IXIC → ^GSPC/^DJI/^IXIC）、港股去前导零
+- 日期按响应 meta.gmtoffset 换算为交易所当地日期，不依赖系统时区数据库
+- 写库口径：amount = close * vol，pct_chg 相对前收（序列前一根或库内前收）保留 4 位小数
+"""
+
+import logging
+import os
+from datetime import datetime, timedelta, timezone
+
+from modules.database import get_connection
+
+logger = logging.getLogger(__name__)
+
+_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+
+# 指数代码 → Yahoo 符号
+_INDEX_SYMBOLS = {
+    "SPX.US": "^GSPC",
+    "DJI.US": "^DJI",
+    "IXIC.US": "^IXIC",
+}
+
+# Clash 代理（可用 YAHOO_PROXY 环境变量覆盖）
+DEFAULT_PROXY = os.environ.get("YAHOO_PROXY", "http://127.0.0.1:7890")
+
+# 拉取区间向前多带的天数：保证区间首根 bar 能算出 pct_chg
+_LOOKBACK_DAYS = 15
+
+
+def to_yahoo_symbol(ts_code: str) -> str:
+    """项目标准代码 → Yahoo 符号"""
+    if ts_code in _INDEX_SYMBOLS:
+        return _INDEX_SYMBOLS[ts_code]
+    if ts_code.endswith(".US"):
+        return ts_code[: -len(".US")]
+    if ts_code.endswith(".HK"):
+        # Yahoo 港股代码为无前导零数字 + .HK（02331.HK → 2331.HK）
+        return f"{int(ts_code[: -len('.HK')])}.HK"
+    raise ValueError(f"不支持的市场代码: {ts_code}")
+
+
+def parse_chart_bars(payload: dict, ts_code: str) -> list[dict]:
+    """解析 Chart API 响应为 K 线列表；停牌/缺失行（None）跳过"""
+    result = (payload.get("chart") or {}).get("result") or []
+    if not result or not result[0].get("timestamp"):
+        return []
+
+    node = result[0]
+    gmtoffset = (node.get("meta") or {}).get("gmtoffset", 0)
+    quote = node["indicators"]["quote"][0]
+
+    bars = []
+    for i, ts in enumerate(node["timestamp"]):
+        close = quote["close"][i]
+        if close is None:
+            continue
+        day = datetime.fromtimestamp(ts + gmtoffset, tz=timezone.utc).strftime("%Y%m%d")
+        bars.append(
+            {
+                "ts_code": ts_code,
+                "trade_date": day,
+                "open": quote["open"][i],
+                "high": quote["high"][i],
+                "low": quote["low"][i],
+                "close": close,
+                "vol": quote["volume"][i] or 0,
+            }
+        )
+    return bars
+
+
+def _default_session():
+    """生产 HTTP 会话：curl_cffi + Chrome 指纹 + Clash 代理"""
+    from curl_cffi import requests as curl_requests
+
+    return curl_requests.Session(impersonate="chrome", proxy=DEFAULT_PROXY)
+
+
+def fetch_chart(symbol: str, start_date: str, end_date: str, session) -> dict:
+    """请求 Chart API（period1/period2 为宽松边界，精确区间由本地过滤）"""
+    period1 = int(datetime.strptime(start_date, "%Y%m%d").timestamp()) - _LOOKBACK_DAYS * 86400
+    period2 = int((datetime.strptime(end_date, "%Y%m%d") + timedelta(days=1)).timestamp())
+    resp = session.get(
+        _CHART_URL.format(symbol=symbol),
+        params={
+            "period1": period1,
+            "period2": period2,
+            "interval": "1d",
+            "includePrePost": "false",
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def sync_us_daily(ts_code: str, start_date: str, end_date: str, *, session=None) -> int:
+    """
+    拉取并写入单只美股/港股在 [start_date, end_date] 的日线
+
+    Returns:
+        实际写入条数（0 表示数据源未返回区间内新行情）
+
+    Raises:
+        请求或解析失败时抛异常（由调用方分级重试）
+    """
+    session = session or _default_session()
+    payload = fetch_chart(to_yahoo_symbol(ts_code), start_date, end_date, session)
+    bars = [b for b in parse_chart_bars(payload, ts_code) if start_date <= b["trade_date"] <= end_date]
+    if not bars:
+        return 0
+
+    prev_close = None
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        for bar in bars:
+            if prev_close is not None:
+                pc = prev_close
+            else:
+                row = cursor.execute(
+                    "SELECT close FROM daily_kline WHERE ts_code = ? AND trade_date < ? "
+                    "ORDER BY trade_date DESC LIMIT 1",
+                    (ts_code, bar["trade_date"]),
+                ).fetchone()
+                pc = row[0] if row else None
+            pct_chg = round((bar["close"] - pc) / pc * 100, 4) if pc else 0
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO daily_kline
+                (ts_code, trade_date, open, high, low, close, vol, amount,
+                 pct_chg, vol_ratio, is_limit_up, is_limit_down)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    ts_code,
+                    bar["trade_date"],
+                    bar["open"],
+                    bar["high"],
+                    bar["low"],
+                    bar["close"],
+                    bar["vol"],
+                    bar["close"] * bar["vol"],
+                    pct_chg,
+                    None,
+                    0,
+                    0,
+                ),
+            )
+            prev_close = bar["close"]
+
+    logger.info("Yahoo 日线同步完成: %s, %d 条 (%s-%s)", ts_code, len(bars), start_date, end_date)
+    return len(bars)

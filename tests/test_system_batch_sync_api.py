@@ -1,7 +1,6 @@
-"""批量同步 HTTP 接口测试：快速返回、防重入、状态查询、错误处理、既有接口兼容"""
+"""批量同步 HTTP 接口测试：快速返回、防重入、状态查询、无 token 可用、既有接口兼容"""
 
 import threading
-from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,11 +11,11 @@ from tests.conftest import write_klines_to_db
 @pytest.fixture
 def api_env(temp_db, db_conn, tmp_path, monkeypatch):
     """构造使用临时库与假同步器的 API 环境"""
-    from api.services.sync_service import AShareSyncService
-    from tests.test_a_share_sync_service import FakeSyncer, FIXED_NOW
+    from api.services.sync_service import USStockSyncService
+    from tests.test_us_sync_service import FakeSyncer, FIXED_NOW
 
     syncer = FakeSyncer()
-    service = AShareSyncService(
+    service = USStockSyncService(
         syncer=syncer,
         sleep=lambda s: None,
         now_provider=lambda: FIXED_NOW,
@@ -48,9 +47,9 @@ def test_submit_returns_snapshot_quickly_and_completes(api_env):
     client, service, syncer, db_conn = api_env
     write_klines_to_db(
         db_conn,
-        [{"ts_code": "600519.SH", "trade_date": "20260917", "open": 1, "high": 1, "low": 1, "close": 1, "vol": 1, "amount": 1, "pct_chg": 0}],
+        [{"ts_code": "AAPL.US", "trade_date": "20260917", "open": 1, "high": 1, "low": 1, "close": 1, "vol": 1, "amount": 1, "pct_chg": 0}],
     )
-    syncer._outcomes = {"600519.SH": [2]}
+    syncer._outcomes = {"AAPL.US": [2]}
 
     resp = client.post("/api/v1/system/sync/batch")
     assert resp.status_code == 200
@@ -70,11 +69,11 @@ def test_duplicate_submit_returns_same_task(api_env):
     client, service, syncer, db_conn = api_env
     write_klines_to_db(
         db_conn,
-        [{"ts_code": "600519.SH", "trade_date": "20260917", "open": 1, "high": 1, "low": 1, "close": 1, "vol": 1, "amount": 1, "pct_chg": 0}],
+        [{"ts_code": "AAPL.US", "trade_date": "20260917", "open": 1, "high": 1, "low": 1, "close": 1, "vol": 1, "amount": 1, "pct_chg": 0}],
     )
     gate = threading.Event()
     syncer._gate = gate
-    syncer._outcomes = {"600519.SH": [1]}
+    syncer._outcomes = {"AAPL.US": [1]}
 
     first = client.post("/api/v1/system/sync/batch").json()
     second = client.post("/api/v1/system/sync/batch").json()
@@ -85,22 +84,28 @@ def test_duplicate_submit_returns_same_task(api_env):
     assert len(syncer.daily_calls) == 1
 
 
-def test_missing_config_returns_503(temp_db, tmp_path, monkeypatch):
-    """缺少必要配置时返回 503 与明确错误信息"""
+def test_submit_works_without_tushare_token(temp_db, db_conn, tmp_path, monkeypatch):
+    """美股/港股走 Yahoo，缺少 TUSHARE_TOKEN 时接口仍可正常提交（不返回 503）"""
     import os
 
-    from api.services.sync_service import AShareSyncService
+    from api.services.sync_service import USStockSyncService
+    from tests.test_us_sync_service import FakeSyncer, FIXED_NOW
     from api.routes import system as system_module
     from api.main import app
 
     os.environ.pop("TUSHARE_TOKEN", None)
-    service = AShareSyncService(backup_dir=tmp_path / "backups")
+    service = USStockSyncService(
+        syncer=FakeSyncer(),
+        sleep=lambda s: None,
+        now_provider=lambda: FIXED_NOW,
+        backup_dir=tmp_path / "backups",
+    )
     monkeypatch.setattr(system_module, "get_a_share_sync_service", lambda: service)
 
     client = TestClient(app)
     resp = client.post("/api/v1/system/sync/batch")
-    assert resp.status_code == 503
-    assert "TUSHARE_TOKEN" in resp.json()["detail"]
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "running"
 
 
 def test_existing_sync_log_endpoint_unchanged(api_env):
