@@ -6,6 +6,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 
 from api.models.common import StatusResponse
+from api.models.sync import BatchSyncSnapshot
+from api.services.sync_service import SyncConfigError, get_a_share_sync_service
 from api.config import settings
 
 logger = logging.getLogger(__name__)
@@ -50,6 +52,25 @@ def sync_status():
         return {"logs": logs}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取同步状态失败: {e}")
+
+
+@router.post("/sync/batch", response_model=BatchSyncSnapshot)
+def start_batch_sync():
+    """提交 A 股批量同步任务：快速返回任务快照，后台线程继续执行。
+
+    重复提交（连点/多页面）返回同一运行中任务，不重复排队。
+    """
+    try:
+        snapshot = get_a_share_sync_service().submit()
+    except SyncConfigError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return snapshot.to_dict()
+
+
+@router.get("/sync/batch/status", response_model=BatchSyncSnapshot)
+def batch_sync_status():
+    """当前或最近一次批量同步任务快照；从未运行过返回空闲状态"""
+    return get_a_share_sync_service().get_status().to_dict()
 
 
 @router.post("/sync/{ts_code}", response_model=StatusResponse)

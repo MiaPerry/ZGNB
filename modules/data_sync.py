@@ -201,7 +201,13 @@ class DataSyncer:
 
     # ==================== 日线K线数据 ====================
 
-    def sync_daily_kline(self, ts_code: str, start_date: str | None = None, end_date: str | None = None) -> int:
+    def sync_daily_kline(
+        self,
+        ts_code: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        raise_on_error: bool = False,
+    ) -> int:
         """
         同步单只股票的日线数据（增量更新）
 
@@ -209,6 +215,8 @@ class DataSyncer:
             ts_code: 股票代码，如 '000001.SZ'
             start_date: 开始日期，格式 YYYYMMDD，None 表示从数据库最后一条开始
             end_date: 结束日期，格式 YYYYMMDD，None 表示到最新
+            raise_on_error: True 时异常透传（调用方可区分失败与无新增）；
+                默认 False 保持旧行为：记录日志并返回 0
 
         Returns:
             更新条数
@@ -288,6 +296,8 @@ class DataSyncer:
         except Exception as e:
             logger.error(f"日线数据同步失败 {ts_code}: {e}")
             self._log_sync("daily_kline", ts_code, "", "failed", str(e))
+            if raise_on_error:
+                raise
             return 0
 
     def sync_missing(self, ts_codes: list[str], days: int = 730) -> dict[str, int]:
