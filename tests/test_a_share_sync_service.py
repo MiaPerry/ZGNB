@@ -93,24 +93,26 @@ def test_query_end_date_rolls_back_weekend():
 # ==================== sync_daily_kline raise_on_error 兼容 ====================
 
 
-def _make_syncer_with_boom():
-    from modules.data_sync import DataSyncer
+def _make_syncer_with_boom(monkeypatch):
+    from modules import data_sync as ds_module
 
-    syncer = DataSyncer(token="test-token")
+    syncer = ds_module.DataSyncer(token="test-token")
     syncer.pro = Mock()
+    # 同时拦截两条拉数路径：main 分支用 pro.daily，us 分支用 ts.pro_bar
     syncer.pro.daily = Mock(side_effect=Exception("boom"))
+    monkeypatch.setattr(ds_module.ts, "pro_bar", Mock(side_effect=Exception("boom")), raising=False)
     return syncer
 
 
-def test_sync_daily_kline_swallows_error_by_default(temp_db):
+def test_sync_daily_kline_swallows_error_by_default(temp_db, monkeypatch):
     """旧行为兼容：默认异常时记录日志并返回 0"""
-    syncer = _make_syncer_with_boom()
+    syncer = _make_syncer_with_boom(monkeypatch)
     assert syncer.sync_daily_kline("600519.SH") == 0
 
 
-def test_sync_daily_kline_raise_on_error(temp_db):
+def test_sync_daily_kline_raise_on_error(temp_db, monkeypatch):
     """raise_on_error=True 时透传异常，调用方可区分失败与无新增"""
-    syncer = _make_syncer_with_boom()
+    syncer = _make_syncer_with_boom(monkeypatch)
     with pytest.raises(Exception, match="boom"):
         syncer.sync_daily_kline("600519.SH", raise_on_error=True)
 
