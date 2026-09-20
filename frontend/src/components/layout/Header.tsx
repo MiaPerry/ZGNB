@@ -2,6 +2,7 @@ import { useState, useRef, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAppStore } from '../../stores/appStore';
 import { useGlobalShortcuts } from '../../lib/hooks';
+import SyncButton from './SyncButton';
 
 export default function Header() {
   const navigate = useNavigate();
@@ -116,6 +117,7 @@ export default function Header() {
         )}
       </div>
       <div className="text-xs text-text-muted flex items-center gap-3">
+        <SyncButton />
         {!isDashboard && (
           <kbd className="hidden md:inline rounded border border-border/60 bg-bg-primary px-1.5 py-0.5 text-[10px] text-text-muted font-mono">⌘K</kbd>
         )}
