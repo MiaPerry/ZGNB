@@ -165,6 +165,26 @@ def test_sync_us_daily_filters_out_of_range_bars(temp_db, db_conn):
     assert added == 1
     count = db_conn.execute("SELECT COUNT(*) FROM daily_kline WHERE ts_code='AAPL.US'").fetchone()[0]
     assert count == 1
+    # 首根也必须使用响应中区间前的前收，不能因为空库而写成 0。
+    pct = db_conn.execute("SELECT pct_chg FROM daily_kline").fetchone()[0]
+    assert pct == pytest.approx(-0.2582, abs=1e-4)
+
+
+def test_parse_chart_error_is_failure_not_empty():
+    from modules.yahoo_sync import parse_chart_bars
+
+    with pytest.raises(ValueError, match="Not Found"):
+        parse_chart_bars({"chart": {"result": None, "error": {"code": "Not Found"}}}, "AAPL.US")
+
+
+def test_fetch_bounds_are_utc():
+    from datetime import datetime, timezone
+    from modules.yahoo_sync import fetch_chart
+
+    session = FakeSession([FakeResponse({})])
+    fetch_chart("AAPL", "20260918", "20260918", session)
+    params = session.calls[0][1]
+    assert params["period2"] == int(datetime(2026, 9, 19, tzinfo=timezone.utc).timestamp())
 
 
 def test_sync_us_daily_raises_on_http_error(temp_db):

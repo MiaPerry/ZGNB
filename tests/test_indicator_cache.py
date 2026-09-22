@@ -83,6 +83,36 @@ def _make_indicator_result(ts_code="600519.SH", trade_date="20260105"):
     )
 
 
+def test_batch_brick_history_reuses_daily_values(temp_db, db_conn, monkeypatch):
+    """逐日结果与原公式完全相同，但批量计算不重复遍历所有历史前缀。"""
+    import math
+    import modules.indicators as indicators
+    from modules.data_sync import DataSyncer
+    from tests.conftest import write_klines_to_db
+
+    rows = []
+    for i in range(160):
+        price = 100 + 15 * math.sin(i / 4)
+        rows.append({"ts_code": "ADI.US", "trade_date": (datetime(2025, 1, 1) + timedelta(days=i)).strftime("%Y%m%d"),
+                     "open": price, "high": price + 2, "low": price - 2, "close": price,
+                     "vol": 1000, "amount": price * 1000, "pct_chg": 0})
+    write_klines_to_db(db_conn, rows)
+    klines = indicators.get_kline_data("ADI.US", 160)
+    expected = [indicators.calculate_brick_history(klines[:i + 1]) for i in range(160)]
+    expected_cross = [indicators.detect_double_line_cross(klines[:i + 1]) for i in range(160)]
+
+    def no_nested_history(*args, **kwargs):
+        raise AssertionError("不应重复计算历史前缀")
+
+    monkeypatch.setattr(indicators, "calculate_brick_history", no_nested_history)
+    monkeypatch.setattr(indicators, "detect_double_line_cross", no_nested_history)
+    assert DataSyncer().sync_indicator_cache("ADI.US", days=160) == 160
+    actual = db_conn.execute("SELECT brick_trend, brick_count FROM indicator_cache ORDER BY trade_date").fetchall()
+    assert [tuple(row) for row in actual] == expected
+    crosses = db_conn.execute("SELECT is_gold_cross, is_dead_cross FROM indicator_cache ORDER BY trade_date").fetchall()
+    assert [tuple(row) for row in crosses] == expected_cross
+
+
 class TestIndicatorCache:
     def setup_method(self):
         """每个测试方法前清理内存缓存"""

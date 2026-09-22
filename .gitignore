@@ -10,6 +10,8 @@ PHASE2_SYNTHESIS.md
 data/*.db-journal
 data/*.db-shm
 data/*.db-wal
+# 导入前的本地恢复点保留在磁盘，不提交备份副本
+data/backups/
 
 # 原始语料（体积大、版权问题，仓库中仅保留调研提炼文件和 SKILL.md）
 references/sources/

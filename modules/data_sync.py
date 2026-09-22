@@ -433,10 +433,8 @@ class DataSyncer:
                 calculate_vol_ratio,
                 calculate_zg_white,
                 calculate_dg_yellow,
-                detect_double_line_cross,
                 detect_needle_20,
                 calculate_brick_value,
-                calculate_brick_history,
                 detect_brick_trend,
                 detect_fanbao,
                 detect_volume_pattern,
@@ -460,6 +458,10 @@ class DataSyncer:
             with get_connection() as conn:
                 cursor = conn.cursor()
 
+                prev_white, prev_yellow = 0, 0
+                prev_brick = 0
+                prev_brick_color = None
+                consecutive_bricks = 0
                 for i, kline in enumerate(klines):
                     # 计算单日指标
                     sub_klines = klines[: i + 1]
@@ -498,17 +500,24 @@ class DataSyncer:
 
                     zg_white = calculate_zg_white(sub_klines) if len(sub_klines) >= 115 else 0
                     dg_yellow = calculate_dg_yellow(sub_klines) if len(sub_klines) >= 115 else 0
-                    gold_cross, dead_cross = (
-                        detect_double_line_cross(sub_klines) if len(sub_klines) >= 115 else (False, False)
-                    )
+                    # 原双线公式需至少 3 个有效点（第 114~116 根），仅比较昨日和今日。
+                    gold_cross = i >= 115 and prev_white <= prev_yellow and zg_white > dg_yellow
+                    dead_cross = i >= 115 and prev_white >= prev_yellow and zg_white < dg_yellow
+                    prev_white, prev_yellow = zg_white, dg_yellow
 
                     rsl_short, rsl_long, is_needle = (
                         detect_needle_20(sub_klines) if len(sub_klines) >= 22 else (50, 50, False)
                     )
 
                     brick_value = calculate_brick_value(sub_klines) if len(sub_klines) >= 8 else 0
+                    # 原公式从第 8 根开始比较砖值；复用逐日结果，避免三重历史遍历。
+                    if i >= 8:
+                        color = "RED" if brick_value >= prev_brick else "GREEN"
+                        consecutive_bricks = consecutive_bricks + 1 if color == prev_brick_color else 1
+                        prev_brick_color = color
+                    prev_brick = brick_value
                     brick_trend, brick_count = (
-                        calculate_brick_history(sub_klines) if len(sub_klines) >= 10 else ("NEUTRAL", 0)
+                        (prev_brick_color, consecutive_bricks) if i >= 9 else ("NEUTRAL", 0)
                     )
                     brick_trend_up = detect_brick_trend(sub_klines) if len(sub_klines) >= 115 else False
                     is_fanbao = detect_fanbao(sub_klines) if len(sub_klines) >= 4 else False

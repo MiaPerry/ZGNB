@@ -45,7 +45,10 @@ def to_yahoo_symbol(ts_code: str) -> str:
 
 def parse_chart_bars(payload: dict, ts_code: str) -> list[dict]:
     """解析 Chart API 响应为 K 线列表；停牌/缺失行（None）跳过"""
-    result = (payload.get("chart") or {}).get("result") or []
+    chart = payload.get("chart") or {}
+    if chart.get("error"):
+        raise ValueError(f"Yahoo Chart 错误: {chart['error']}")
+    result = chart.get("result") or []
     if not result or not result[0].get("timestamp"):
         return []
 
@@ -82,8 +85,8 @@ def _default_session():
 
 def fetch_chart(symbol: str, start_date: str, end_date: str, session) -> dict:
     """请求 Chart API（period1/period2 为宽松边界，精确区间由本地过滤）"""
-    period1 = int(datetime.strptime(start_date, "%Y%m%d").timestamp()) - _LOOKBACK_DAYS * 86400
-    period2 = int((datetime.strptime(end_date, "%Y%m%d") + timedelta(days=1)).timestamp())
+    period1 = int(datetime.strptime(start_date, "%Y%m%d").replace(tzinfo=timezone.utc).timestamp()) - _LOOKBACK_DAYS * 86400
+    period2 = int((datetime.strptime(end_date, "%Y%m%d").replace(tzinfo=timezone.utc) + timedelta(days=1)).timestamp())
     resp = session.get(
         _CHART_URL.format(symbol=symbol),
         params={
@@ -110,11 +113,14 @@ def sync_us_daily(ts_code: str, start_date: str, end_date: str, *, session=None)
     """
     session = session or _default_session()
     payload = fetch_chart(to_yahoo_symbol(ts_code), start_date, end_date, session)
-    bars = [b for b in parse_chart_bars(payload, ts_code) if start_date <= b["trade_date"] <= end_date]
+    all_bars = sorted(parse_chart_bars(payload, ts_code), key=lambda b: b["trade_date"])
+    bars = [b for b in all_bars if start_date <= b["trade_date"] <= end_date]
     if not bars:
         return 0
 
-    prev_close = None
+    # 使用同一行情响应的前收，回补首日不再因空库而丢失涨跌幅。
+    previous = [b for b in all_bars if b["trade_date"] < start_date]
+    prev_close = previous[-1]["close"] if previous else None
     with get_connection() as conn:
         cursor = conn.cursor()
         for bar in bars:
