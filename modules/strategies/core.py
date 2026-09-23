@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Optional
 from dataclasses import dataclass, field
 from enum import Enum
+from contextlib import closing
 from modules.database import get_db_connection
 
 
@@ -113,34 +114,33 @@ def get_kline_data(ts_code: str, days: int = 120) -> list[dict]:
     """
     获取K线数据，并关联指标缓存与资金流数据
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    with closing(get_db_connection()) as conn:
+        cursor = conn.cursor()
 
-    # 联表查询：K线 + 指标缓存(Bollinger/RSI/DMI) + 资金流
-    # 注意：先按 DESC 取最近 N 条，再在 Python 端反转回正序
-    # （SQLite 在子查询里包一层即可避免 ORDER BY + LIMIT 顺序冲突）
-    cursor.execute(
-        """
-        SELECT
-            k.ts_code, k.trade_date, k.open, k.high, k.low, k.close, k.vol, k.amount, k.pct_chg,
-            i.boll_upper, i.boll_mid, i.boll_lower, i.rsi6, i.adx, i.dmi_plus, i.dmi_minus,
-            m.buy_lg_amount, m.buy_elg_amount, m.sell_lg_amount, m.sell_elg_amount, m.net_mf
-        FROM (
-            SELECT ts_code, trade_date, open, high, low, close, vol, amount, pct_chg
-            FROM daily_kline
-            WHERE ts_code = ?
-            ORDER BY trade_date DESC
-            LIMIT ?
-        ) k
-        LEFT JOIN indicator_cache i ON k.ts_code = i.ts_code AND k.trade_date = i.trade_date
-        LEFT JOIN moneyflow m ON k.ts_code = m.ts_code AND k.trade_date = m.trade_date
-        ORDER BY k.trade_date ASC
-    """,
-        (ts_code, days),
-    )
+        # 联表查询：K线 + 指标缓存(Bollinger/RSI/DMI) + 资金流
+        # 注意：先按 DESC 取最近 N 条，再在 Python 端反转回正序
+        # （SQLite 在子查询里包一层即可避免 ORDER BY + LIMIT 顺序冲突）
+        cursor.execute(
+            """
+            SELECT
+                k.ts_code, k.trade_date, k.open, k.high, k.low, k.close, k.vol, k.amount, k.pct_chg,
+                i.boll_upper, i.boll_mid, i.boll_lower, i.rsi6, i.adx, i.dmi_plus, i.dmi_minus,
+                m.buy_lg_amount, m.buy_elg_amount, m.sell_lg_amount, m.sell_elg_amount, m.net_mf
+            FROM (
+                SELECT ts_code, trade_date, open, high, low, close, vol, amount, pct_chg
+                FROM daily_kline
+                WHERE ts_code = ?
+                ORDER BY trade_date DESC
+                LIMIT ?
+            ) k
+            LEFT JOIN indicator_cache i ON k.ts_code = i.ts_code AND k.trade_date = i.trade_date
+            LEFT JOIN moneyflow m ON k.ts_code = m.ts_code AND k.trade_date = m.trade_date
+            ORDER BY k.trade_date ASC
+        """,
+            (ts_code, days),
+        )
 
-    rows = cursor.fetchall()
-    conn.close()
+        rows = cursor.fetchall()
 
     data_list = []
     for i, row in enumerate(rows):

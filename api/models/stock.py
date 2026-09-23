@@ -1,7 +1,43 @@
 """股票分析相关 Pydantic 模型"""
 
-from typing import Any
+from typing import Any, Literal
 from pydantic import BaseModel
+
+
+# ── 股票库 ──
+
+StockMarket = Literal["美股", "港股", "美股指数"]
+StockSort = Literal["ts_code", "pct_chg", "vol"]
+StockDataStatus = Literal["available", "missing"]
+
+
+class StockListItem(BaseModel):
+    ts_code: str
+    name: str
+    market: StockMarket
+    industry: str
+    close: float | None = None
+    pct_chg: float | None = None
+    vol: float | None = None
+    trade_date: str | None = None
+    data_status: StockDataStatus
+    is_watchlisted: bool
+
+
+class StockMarketCount(BaseModel):
+    market: StockMarket
+    count: int
+
+
+class StockListResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    items: list[StockListItem]
+    market_total: int
+    latest_trade_date: str | None
+    industries: list[str]
+    markets: list[StockMarketCount]
 
 
 # ── 指标详情 ──

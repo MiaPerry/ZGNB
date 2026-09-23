@@ -8,6 +8,7 @@ import LoadingSpinner from './components/ui/LoadingSpinner';
 // 静态导入:轻量页(快速进入)
 import Dashboard from './pages/Dashboard';
 import Screener from './pages/Screener';
+import StockList from './pages/StockList';
 import Watchlist from './pages/Watchlist';
 import Trades from './pages/Trades';
 import Settings from './pages/Settings';
@@ -49,6 +50,7 @@ export default function App() {
                   </Suspense>
                 }
               />
+              <Route path="/stocks" element={<StockList />} />
               <Route path="/screen" element={<Screener />} />
               <Route path="/watchlist" element={<Watchlist />} />
               <Route

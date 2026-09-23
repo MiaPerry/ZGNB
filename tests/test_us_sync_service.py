@@ -321,3 +321,44 @@ def test_submit_without_tushare_token_works(temp_db, db_conn, tmp_path):
 
     assert final.status == "completed"
     assert final.no_change == 1
+
+
+def test_real_incremental_sync_preserves_personal_data(temp_db, db_conn, tmp_path, monkeypatch):
+    from api.services.sync_service import YahooSyncer
+    from tests.test_yahoo_sync import FakeResponse, FakeSession, _chart_payload
+
+    _write_kline(db_conn, "AAPL.US", "20260917")
+    db_conn.execute("INSERT INTO watchlist(ts_code, notes) VALUES ('AAPL.US', '正式自选备注')")
+    db_conn.execute(
+        "INSERT INTO trade_records(ts_code, trade_date, action, price, quantity, amount, notes) "
+        "VALUES ('AAPL.US', '20260917', 'buy', 100, 2, 200, '正式交易备注')"
+    )
+    db_conn.commit()
+    tables = ("watchlist", "trade_records")
+    before = {table: [tuple(row) for row in db_conn.execute(f"SELECT * FROM {table}")] for table in tables}
+    payload = _chart_payload(
+        [1789738200], {"open": [100], "high": [102], "low": [99], "close": [101], "volume": [100]}, -14400
+    )
+    syncer = YahooSyncer(session=FakeSession([FakeResponse(payload)]))
+    monkeypatch.setattr(syncer, "sync_indicator_cache", lambda *args, **kwargs: 2)
+    _, final = _run_and_wait(_make_service(syncer, tmp_path))
+    assert final.status == "completed"
+    assert final.new_rows == 1
+    assert final.data_date == "20260918"
+    for table in tables:
+        assert [tuple(row) for row in db_conn.execute(f"SELECT * FROM {table}")] == before[table]
+
+
+def test_proxy_failure_is_failed_and_safe_in_task_status(temp_db, db_conn, tmp_path, caplog):
+    from api.services.sync_service import YahooSyncer
+    from tests.test_yahoo_sync import FakeSession
+
+    _write_kline(db_conn, "AAPL.US", "20260917")
+    session = FakeSession([ConnectionError("http://private-user:private-password@invalid")] * 3)
+    _, final = _run_and_wait(_make_service(YahooSyncer(session=session), tmp_path))
+    assert final.status == "failed"
+    assert final.failed == 1
+    assert final.success == final.no_change == final.new_rows == 0
+    assert len(session.calls) == 3
+    assert "private-password" not in str(final.to_dict()) + caplog.text
+    assert "private-user" not in str(final.to_dict()) + caplog.text

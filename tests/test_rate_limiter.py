@@ -11,6 +11,8 @@ import multiprocessing
 import time
 from pathlib import Path
 
+import pytest
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -120,19 +122,21 @@ def _child_wait_n_times(n: int, max_per_min: int) -> int:
     return rl.current_count
 
 
-def test_rate_limiter_works_in_subprocess():
+@pytest.mark.parametrize("start_method", multiprocessing.get_all_start_methods())
+def test_rate_limiter_works_in_subprocess(start_method):
     """_RateLimiter 必须在子进程中能正常工作（multiprocessing.Lock 可继承）"""
     # 子进程中调 3 次 wait()，current_count 应为 3
-    ctx = multiprocessing.get_context("fork")
+    ctx = multiprocessing.get_context(start_method)
     with ctx.Pool(1) as pool:
         result = pool.apply_async(_child_wait_n_times, (3, 1000))
         count = result.get(timeout=10)
     assert count == 3, f"子进程 current_count={count}（期望 3）"
 
 
-def test_rate_limiter_works_across_multiple_subprocesses():
+@pytest.mark.parametrize("start_method", multiprocessing.get_all_start_methods())
+def test_rate_limiter_works_across_multiple_subprocesses(start_method):
     """多子进程并发调 wait() 必须全部成功（multiprocessing.Lock 序列化）"""
-    ctx = multiprocessing.get_context("fork")
+    ctx = multiprocessing.get_context(start_method)
     with ctx.Pool(2) as pool:
         r1 = pool.apply_async(_child_wait_n_times, (5, 1000))
         r2 = pool.apply_async(_child_wait_n_times, (5, 1000))

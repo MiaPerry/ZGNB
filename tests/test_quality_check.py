@@ -21,7 +21,7 @@ SKILL_MD = PROJECT_ROOT / "SKILL.md"
 def run_quality_check(*flags) -> subprocess.CompletedProcess:
     """调 quality_check.py 跑 SKILL.md"""
     cmd = [sys.executable, str(QUALITY_CHECK), str(SKILL_MD), *flags]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=30)
 
 
 # ==================== --json flag ====================
@@ -67,7 +67,8 @@ def test_json_output_uses_unicode():
     """中文 check 名称必须正确出现在 JSON（不转义）"""
     result = run_quality_check("--json")
     # 验证 ensure_ascii=False 生效
-    assert "\\u" not in result.stdout  # 没有 unicode 转义
+    for check in json.loads(result.stdout)["checks"]:
+        assert json.dumps(check["name"], ensure_ascii=False) in result.stdout  # 没有 unicode 转义
     assert "心智模型" in result.stdout  # 中文原样输出
 
 
@@ -108,6 +109,7 @@ def test_missing_file_arg_exits_one():
         [sys.executable, str(QUALITY_CHECK)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=10,
     )
     assert result.returncode == 1
@@ -120,6 +122,7 @@ def test_missing_file_with_json_exits_one():
         [sys.executable, str(QUALITY_CHECK), "--json"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=10,
     )
     assert result.returncode == 1

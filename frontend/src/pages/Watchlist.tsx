@@ -29,6 +29,7 @@ export default function Watchlist() {
     mutationFn: (code: string) => addToWatchlist(code, newTags),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['watchlist'] });
+      queryClient.invalidateQueries({ queryKey: ['stock', 'list'] });
       setNewCode('');
       setNewTags('');
     },
@@ -36,7 +37,10 @@ export default function Watchlist() {
 
   const removeMutation = useMutation({
     mutationFn: removeFromWatchlist,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['watchlist'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['watchlist'] });
+      queryClient.invalidateQueries({ queryKey: ['stock', 'list'] });
+    },
   });
 
   const handleScan = () => {

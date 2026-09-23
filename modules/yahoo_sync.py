@@ -9,6 +9,7 @@ Yahoo Finance 美股/港股日线同步适配器（us 分支专用）
 
 import logging
 import os
+from contextlib import closing, nullcontext
 from datetime import datetime, timedelta, timezone
 
 from modules.database import get_connection
@@ -25,7 +26,7 @@ _INDEX_SYMBOLS = {
 }
 
 # Clash 代理（可用 YAHOO_PROXY 环境变量覆盖）
-DEFAULT_PROXY = os.environ.get("YAHOO_PROXY", "http://127.0.0.1:7890")
+DEFAULT_PROXY = "http://127.0.0.1:7890"
 
 # 拉取区间向前多带的天数：保证区间首根 bar 能算出 pct_chg
 _LOOKBACK_DAYS = 15
@@ -47,7 +48,11 @@ def parse_chart_bars(payload: dict, ts_code: str) -> list[dict]:
     """解析 Chart API 响应为 K 线列表；停牌/缺失行（None）跳过"""
     chart = payload.get("chart") or {}
     if chart.get("error"):
-        raise ValueError(f"Yahoo Chart 错误: {chart['error']}")
+        error = chart["error"]
+        code = error.get("code") if isinstance(error, dict) else None
+        safe_codes = {"Not Found", "Bad Request", "Unauthorized", "Forbidden", "Too Many Requests"}
+        detail = code if isinstance(code, str) and code in safe_codes else "数据源返回错误"
+        raise ValueError(f"Yahoo Chart 错误: {detail}")
     result = chart.get("result") or []
     if not result or not result[0].get("timestamp"):
         return []
@@ -80,25 +85,43 @@ def _default_session():
     """生产 HTTP 会话：curl_cffi + Chrome 指纹 + Clash 代理"""
     from curl_cffi import requests as curl_requests
 
-    return curl_requests.Session(impersonate="chrome", proxy=DEFAULT_PROXY)
+    from curl_cffi import CurlOpt
+
+    proxy = os.environ.get("YAHOO_PROXY", DEFAULT_PROXY).strip()
+    # libcurl 自身也读取代理环境变量；空 PROXY 禁用隐式代理，空 NOPROXY 禁用隐式绕过。
+    try:
+        return curl_requests.Session(
+            impersonate="chrome",
+            proxy=proxy,
+            trust_env=False,
+            curl_options={CurlOpt.PROXY: proxy, CurlOpt.NOPROXY: ""},
+        )
+    except Exception:
+        raise ConnectionError("Yahoo 会话创建失败；请检查 YAHOO_PROXY 配置。") from None
 
 
 def fetch_chart(symbol: str, start_date: str, end_date: str, session) -> dict:
     """请求 Chart API（period1/period2 为宽松边界，精确区间由本地过滤）"""
     period1 = int(datetime.strptime(start_date, "%Y%m%d").replace(tzinfo=timezone.utc).timestamp()) - _LOOKBACK_DAYS * 86400
     period2 = int((datetime.strptime(end_date, "%Y%m%d").replace(tzinfo=timezone.utc) + timedelta(days=1)).timestamp())
-    resp = session.get(
-        _CHART_URL.format(symbol=symbol),
-        params={
-            "period1": period1,
-            "period2": period2,
-            "interval": "1d",
-            "includePrePost": "false",
-        },
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()
+    try:
+        resp = session.get(
+            _CHART_URL.format(symbol=symbol),
+            params={
+                "period1": period1,
+                "period2": period2,
+                "interval": "1d",
+                "includePrePost": "false",
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as exc:
+        # 不透出底层异常文本或异常链：其中可能含代理 URL、认证字段或响应正文。
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        detail = f"HTTP {status}" if type(status) is int and 100 <= status <= 599 else "网络或响应解析错误"
+        raise ConnectionError(f"Yahoo 请求失败（{detail}）；请检查 YAHOO_PROXY 与数据源连通性。") from None
 
 
 def sync_us_daily(ts_code: str, start_date: str, end_date: str, *, session=None) -> int:
@@ -111,8 +134,8 @@ def sync_us_daily(ts_code: str, start_date: str, end_date: str, *, session=None)
     Raises:
         请求或解析失败时抛异常（由调用方分级重试）
     """
-    session = session or _default_session()
-    payload = fetch_chart(to_yahoo_symbol(ts_code), start_date, end_date, session)
+    with closing(_default_session()) if session is None else nullcontext(session) as active_session:
+        payload = fetch_chart(to_yahoo_symbol(ts_code), start_date, end_date, active_session)
     all_bars = sorted(parse_chart_bars(payload, ts_code), key=lambda b: b["trade_date"])
     bars = [b for b in all_bars if start_date <= b["trade_date"] <= end_date]
     if not bars:

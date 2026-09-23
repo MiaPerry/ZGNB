@@ -155,11 +155,12 @@ class SyncTaskSnapshot:
         return asdict(self)
 
 
-def backup_database(dest_path: Path) -> Path:
+def backup_database(dest_path: Path, *, source_path: Path | None = None) -> Path:
     """通过 SQLite backup API 备份当前数据库（WAL 安全），并做完整性校验"""
     dest_path = Path(dest_path)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    src = sqlite3.connect(f"file:{get_db_path()}?mode=ro", uri=True)
+    source = Path(source_path).resolve() if source_path is not None else get_db_path()
+    src = sqlite3.connect(f"{source.as_uri()}?mode=ro", uri=True)
     try:
         dest = sqlite3.connect(dest_path)
         try:

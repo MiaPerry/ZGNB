@@ -218,3 +218,122 @@ def test_sync_us_daily_hk_stock(temp_db, db_conn):
     ).fetchone()
     assert row[0] == "20260918"
     assert row[1] == 12.57
+
+
+@pytest.mark.parametrize("proxy", [None, "http://proxy.example:8080", ""])
+def test_session_resolves_proxy_at_creation_and_ignores_global_env(monkeypatch, proxy):
+    import os
+    from unittest.mock import Mock
+    from curl_cffi import CurlOpt, requests
+    from modules import yahoo_sync
+
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.setenv(key, "http://unrelated.invalid:9999")
+    monkeypatch.setenv("NO_PROXY", "*")
+    monkeypatch.setenv("no_proxy", "*")
+    if proxy is None:
+        monkeypatch.delenv("YAHOO_PROXY", raising=False)
+    else:
+        monkeypatch.setenv("YAHOO_PROXY", proxy)
+    before = dict(os.environ)
+    factory = Mock()
+    monkeypatch.setattr(requests, "Session", factory)
+    yahoo_sync._default_session()
+    kwargs = factory.call_args.kwargs
+    expected = "http://127.0.0.1:7890" if proxy is None else proxy
+    assert kwargs["proxy"] == expected
+    assert kwargs["trust_env"] is False
+    assert kwargs["curl_options"][CurlOpt.PROXY] == expected
+    assert kwargs["curl_options"][CurlOpt.NOPROXY] == ""
+    assert dict(os.environ) == before
+
+
+@pytest.mark.parametrize("direct", [True, False])
+def test_real_curl_session_respects_explicit_route(monkeypatch, direct):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+    from modules.yahoo_sync import _default_session
+
+    paths = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            paths.append(self.path)
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"route-ok")
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    address = f"http://127.0.0.1:{server.server_port}"
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.setenv(key, "http://127.0.0.1:1")
+    monkeypatch.setenv("NO_PROXY", "*" if not direct else "")
+    monkeypatch.setenv("no_proxy", "*" if not direct else "")
+    monkeypatch.setenv("YAHOO_PROXY", "" if direct else address)
+    try:
+        with _default_session() as session:
+            url = address + "/probe" if direct else "http://yahoo-route.invalid/probe"
+            assert session.get(url, timeout=3).text == "route-ok"
+        assert paths == (["/probe"] if direct else ["http://yahoo-route.invalid/probe"])
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
+@pytest.mark.parametrize("status", [None, 401, 403, 429, 502])
+def test_request_errors_hide_credentials_and_preserve_classification(status):
+    import traceback
+    from types import SimpleNamespace
+    from api.services.sync_service import classify_error
+    from modules.yahoo_sync import fetch_chart
+
+    exc = ConnectionError("proxy http://test-user:p%40ss-secret@proxy.invalid:7890 password=p@ss-secret")
+    exc.response = SimpleNamespace(status_code=status)
+    session = FakeSession([exc])
+    with pytest.raises(ConnectionError) as caught:
+        fetch_chart("AAPL", "20260901", "20260918", session)
+    rendered = "".join(traceback.format_exception(caught.value))
+    assert "test-user" not in rendered
+    assert "secret" not in rendered
+    assert "proxy.invalid" not in rendered
+    assert len(session.calls) == 1
+    expected = "rate_limit" if status == 429 else "auth" if status in (401, 403) else "network"
+    assert classify_error(caught.value) == expected
+
+
+def test_session_creation_and_chart_error_do_not_expose_private_details(monkeypatch):
+    from unittest.mock import Mock
+    from curl_cffi import requests
+    from modules import yahoo_sync
+
+    private = "http://private-user:private-password@proxy.invalid"
+    monkeypatch.setattr(requests, "Session", Mock(side_effect=ValueError(private)))
+    with pytest.raises(ConnectionError) as caught:
+        yahoo_sync._default_session()
+    assert private not in str(caught.value)
+    with pytest.raises(ValueError) as caught:
+        yahoo_sync.parse_chart_bars({"chart": {"error": {"code": "Not Found", "description": private}}}, "AAPL.US")
+    assert "Not Found" in str(caught.value)
+    assert private not in str(caught.value)
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_owned_session_is_closed_after_sync(monkeypatch, failure):
+    from unittest.mock import Mock
+    from modules import yahoo_sync
+
+    session = FakeSession([ConnectionError("unreachable") if failure else FakeResponse({"chart": {"result": []}})])
+    session.close = Mock()
+    monkeypatch.setattr(yahoo_sync, "_default_session", lambda: session)
+    if failure:
+        with pytest.raises(ConnectionError):
+            yahoo_sync.sync_us_daily("AAPL.US", "20260918", "20260918")
+    else:
+        assert yahoo_sync.sync_us_daily("AAPL.US", "20260918", "20260918") == 0
+    session.close.assert_called_once()

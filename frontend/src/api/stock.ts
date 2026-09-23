@@ -1,5 +1,10 @@
 import api from './client';
-import type { StockAnalysis, KlineChart, CommentaryResponse } from './types';
+import type { StockAnalysis, KlineChart, CommentaryResponse, StockListParams, StockListResponse } from './types';
+
+export async function fetchStockList(params: StockListParams, signal?: AbortSignal): Promise<StockListResponse> {
+  const { data } = await api.get<StockListResponse>('/stock/list', { params, signal });
+  return data;
+}
 
 export async function fetchStockAnalysis(tsCode: string, days = 120): Promise<StockAnalysis> {
   const { data } = await api.get<StockAnalysis>(`/stock/analyze/${tsCode}`, { params: { days } });

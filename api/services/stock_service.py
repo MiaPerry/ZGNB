@@ -6,6 +6,77 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def list_stocks(
+    market: str = "美股", q: str = "", industry: str | None = None,
+    data_status: str = "all", sort_by: str = "ts_code", order: str = "asc",
+    page: int = 1, page_size: int = 25,
+) -> dict[str, Any]:
+    """只读股票库：按各标的最近交易日取行情，不触发分析或同步。"""
+    from modules.database import get_connection
+
+    # 排序仅使用白名单列名；用户输入均通过参数绑定，搜索通配符按字面量匹配。
+    sort_column = {"ts_code": "ts_code", "pct_chg": "pct_chg", "vol": "vol"}[sort_by]
+    direction = {"asc": "ASC", "desc": "DESC"}[order]
+    where = ["1 = 1"]
+    params: list[Any] = [market]
+    if q.strip():
+        escaped = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        where.append("(ts_code LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\')")
+        params.extend([f"%{escaped}%"] * 2)
+    if industry is not None:
+        where.append("industry = ?")
+        params.append(industry.strip())
+    if data_status != "all":
+        where.append("data_status = ?")
+        params.append(data_status)
+    clause = " AND ".join(where)
+    catalog = """
+        WITH catalog AS (
+            SELECT s.ts_code, COALESCE(NULLIF(s.name, ''), s.ts_code) AS name,
+                   s.market, TRIM(COALESCE(s.industry, '')) AS industry,
+                   CASE WHEN k.close > 0 THEN k.close END AS close,
+                   CASE WHEN k.close > 0 THEN k.pct_chg END AS pct_chg,
+                   CASE WHEN k.close > 0 THEN k.vol END AS vol,
+                   k.trade_date,
+                   CASE WHEN k.close > 0 THEN 'available' ELSE 'missing' END AS data_status,
+                   EXISTS(SELECT 1 FROM watchlist w WHERE w.ts_code = s.ts_code) AS is_watchlisted
+            FROM stock_basic s
+            LEFT JOIN daily_kline k ON k.ts_code = s.ts_code
+                AND k.trade_date = (SELECT MAX(d.trade_date) FROM daily_kline d WHERE d.ts_code = s.ts_code)
+            WHERE s.market = ?
+        )
+    """
+    with get_connection() as conn:
+        # 同一读事务内获取列表、总数与字典，避免同步写入时元数据不一致。
+        conn.execute("BEGIN")
+        total = conn.execute(catalog + f"SELECT COUNT(*) FROM catalog WHERE {clause}", params).fetchone()[0]
+        rows = conn.execute(
+            catalog + f"""SELECT * FROM catalog WHERE {clause}
+                ORDER BY {sort_column} IS NULL, {sort_column} {direction}, ts_code ASC
+                LIMIT ? OFFSET ?""",
+            [*params, page_size, (page - 1) * page_size],
+        ).fetchall()
+        summary = conn.execute(
+            catalog + "SELECT COUNT(*), MAX(CASE WHEN data_status = 'available' THEN trade_date END) FROM catalog",
+            (market,),
+        ).fetchone()
+        industries = conn.execute(
+            "SELECT DISTINCT TRIM(COALESCE(industry, '')) FROM stock_basic WHERE market = ? ORDER BY 1",
+            (market,),
+        ).fetchall()
+        markets = conn.execute("""
+            SELECT market, COUNT(*) AS count FROM stock_basic
+            WHERE market IN ('美股', '港股', '美股指数') GROUP BY market
+            ORDER BY CASE market WHEN '美股' THEN 0 WHEN '港股' THEN 1 ELSE 2 END
+        """).fetchall()
+    return {
+        "total": total, "page": page, "page_size": page_size,
+        "items": [dict(row) for row in rows],
+        "market_total": summary[0], "latest_trade_date": summary[1],
+        "industries": [row[0] for row in industries], "markets": [dict(row) for row in markets],
+    }
+
+
 def get_full_analysis(ts_code: str, days: int = 120) -> dict[str, Any]:
     """
     全量分析：指标 + 三波 + 麒麟会 + 战法信号 + 诊断 + 评分

@@ -1,4 +1,4 @@
-import { useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { useStockAnalysis, useKlineData } from '../hooks/useStockAnalysis';
 import Card from '../components/ui/Card';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
@@ -13,21 +13,32 @@ import { formatNumber, formatPct, pctColor } from '../lib/formatters';
 
 export default function StockAnalysis() {
   const { tsCode = '' } = useParams<{ tsCode: string }>();
+  const location = useLocation();
+  const listSearch = location.state?.stockListSearch;
+  const backToList = typeof listSearch === 'string' ? (
+    <Link to={{ pathname: '/stocks', search: listSearch ? `?${listSearch}` : '' }} className="inline-block text-sm text-accent-blue hover:underline">
+      ← 返回股票列表
+    </Link>
+  ) : null;
   const { data: analysis, isLoading: loadingAnalysis, error: analysisError } = useStockAnalysis(tsCode);
   const { data: klineData, isLoading: loadingKline } = useKlineData(tsCode);
 
   if (loadingAnalysis || loadingKline) {
     return (
-      <div className="flex items-center justify-center h-96">
-        <LoadingSpinner size="lg" />
+      <div>
+        {backToList}
+        <div className="flex items-center justify-center h-96"><LoadingSpinner size="lg" /></div>
       </div>
     );
   }
 
   if (analysisError || !analysis) {
     return (
-      <div className="flex items-center justify-center h-96 text-text-muted">
-        加载失败：{analysisError?.message || '未知错误'}
+      <div>
+        {backToList}
+        <div className="flex items-center justify-center h-96 text-text-muted">
+          加载失败：{analysisError?.message || '未知错误'}
+        </div>
       </div>
     );
   }
@@ -38,6 +49,7 @@ export default function StockAnalysis() {
 
   return (
     <div className="space-y-5">
+      {backToList}
       {/* ============ Header - 股票信息 ============ */}
       <div className="relative overflow-hidden rounded-2xl border border-border/40 bg-gradient-to-br from-bg-secondary via-bg-card to-bg-secondary">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(59,130,246,0.10),transparent_55%)]"></div>

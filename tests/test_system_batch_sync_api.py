@@ -106,6 +106,7 @@ def test_submit_works_without_tushare_token(temp_db, db_conn, tmp_path, monkeypa
     resp = client.post("/api/v1/system/sync/batch")
     assert resp.status_code == 200
     assert resp.json()["status"] == "running"
+    assert service.wait_for_completion(timeout=10)
 
 
 def test_existing_sync_log_endpoint_unchanged(api_env):

@@ -6,6 +6,46 @@ export interface ErrorResponse {
   detail: string;
 }
 
+// ── 股票库 ──
+export type StockMarket = '美股' | '港股' | '美股指数';
+export type StockSort = 'ts_code' | 'pct_chg' | 'vol';
+export type StockDataStatus = 'all' | 'available' | 'missing';
+
+export interface StockListParams {
+  market: StockMarket;
+  q: string;
+  industry?: string;
+  data_status: StockDataStatus;
+  sort_by: StockSort;
+  order: 'asc' | 'desc';
+  page: number;
+  page_size: number;
+}
+
+export interface StockListItem {
+  ts_code: string;
+  name: string;
+  market: StockMarket;
+  industry: string;
+  close: number | null;
+  pct_chg: number | null;
+  vol: number | null;
+  trade_date: string | null;
+  data_status: 'available' | 'missing';
+  is_watchlisted: boolean;
+}
+
+export interface StockListResponse {
+  total: number;
+  page: number;
+  page_size: number;
+  items: StockListItem[];
+  market_total: number;
+  latest_trade_date: string | null;
+  industries: string[];
+  markets: { market: StockMarket; count: number }[];
+}
+
 // ── 股票分析 ──
 export interface StockAnalysis {
   ts_code: string;

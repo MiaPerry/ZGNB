@@ -80,6 +80,41 @@ class TestGetConnection:
                 cursor.execute("INSERT INTO test_rollback (id, name) VALUES (1, NULL)")
 
 
+@pytest.mark.parametrize("consumer", ["strategy", "report"])
+@pytest.mark.parametrize("query_error", [False, True])
+def test_readers_close_owned_connections(temp_db, monkeypatch, consumer, query_error):
+    """读取成功或查询失败都应立即关闭自有连接，不依赖垃圾回收。"""
+    import sqlite3
+    from modules import report
+    from modules.strategies import core
+
+    conn = sqlite3.connect(":memory:" if query_error else temp_db)
+    conn.row_factory = sqlite3.Row
+    try:
+        with monkeypatch.context() as patch:
+            if consumer == "strategy":
+                patch.setattr(core, "get_db_connection", lambda: conn)
+
+                def read():
+                    return core.get_kline_data("AAPL.US")
+
+            else:
+                patch.setattr(report.sqlite3, "connect", lambda *a, **k: conn)
+
+                def read():
+                    return report.assess_watchlist(["AAPL.US"] if query_error else [])
+
+            if query_error:
+                with pytest.raises(sqlite3.OperationalError, match="no such table"):
+                    read()
+            else:
+                assert read() == []
+            with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+                conn.execute("SELECT 1")
+    finally:
+        conn.close()
+
+
 class TestInitDatabase:
     """数据库初始化测试"""
 

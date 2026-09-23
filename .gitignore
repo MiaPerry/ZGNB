@@ -5,11 +5,19 @@ PHASE2_SYNTHESIS.md
 
 # 环境变量（包含敏感信息）
 .env
+.env.*
+!.env.example
 
-# SQLite 运行时临时文件（不入库），主数据库文件 data/*.db 需入库
-data/*.db-journal
-data/*.db-shm
-data/*.db-wal
+# SQLite 数据仅留在各环境；静态股票池 JSON 仍入库
+/data/**/*.db
+/data/**/*.db-*
+/data/**/*.db.*
+/data/**/*.sqlite
+/data/**/*.sqlite-*
+/data/**/*.sqlite.*
+/data/**/*.sqlite3
+/data/**/*.sqlite3-*
+/data/**/*.sqlite3.*
 # 导入前的本地恢复点保留在磁盘，不提交备份副本
 data/backups/
 
