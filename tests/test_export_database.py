@@ -40,6 +40,19 @@ def test_export_includes_wal_and_preserves_source(tmp_path, monkeypatch):
     assert not (tmp_path / "unrelated.db").exists()
 
 
+def test_export_assigns_independent_data_epoch(temp_db, tmp_path):
+    from modules.data_freshness import get_data_version
+    from modules.database import get_db_path
+    from scripts.export_database import export_database
+
+    before = get_data_version()
+    result = export_database(get_db_path(), tmp_path / 'export.db')
+    with closing(sqlite3.connect(result['path'])) as conn:
+        row = conn.execute("SELECT message FROM sync_log WHERE data_type='data_epoch' ORDER BY id DESC LIMIT 1").fetchone()
+        assert row and row[0] != before.split(':')[0]
+    assert get_data_version() == before
+
+
 @pytest.mark.parametrize("case", ["missing", "same", "existing", "corrupt"])
 def test_export_rejects_unsafe_inputs_and_preserves_files(tmp_path, case):
     from scripts.export_database import export_database

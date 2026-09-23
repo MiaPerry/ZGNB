@@ -124,7 +124,7 @@ def fetch_chart(symbol: str, start_date: str, end_date: str, session) -> dict:
         raise ConnectionError(f"Yahoo 请求失败（{detail}）；请检查 YAHOO_PROXY 与数据源连通性。") from None
 
 
-def sync_us_daily(ts_code: str, start_date: str, end_date: str, *, session=None) -> int:
+def sync_us_daily(ts_code: str, start_date: str, end_date: str, *, session=None, incremental=False) -> int:
     """
     拉取并写入单只美股/港股在 [start_date, end_date] 的日线
 
@@ -144,6 +144,7 @@ def sync_us_daily(ts_code: str, start_date: str, end_date: str, *, session=None)
     # 使用同一行情响应的前收，回补首日不再因空库而丢失涨跌幅。
     previous = [b for b in all_bars if b["trade_date"] < start_date]
     prev_close = previous[-1]["close"] if previous else None
+    written = 0
     with get_connection() as conn:
         cursor = conn.cursor()
         for bar in bars:
@@ -158,8 +159,8 @@ def sync_us_daily(ts_code: str, start_date: str, end_date: str, *, session=None)
                 pc = row[0] if row else None
             pct_chg = round((bar["close"] - pc) / pc * 100, 4) if pc else 0
             cursor.execute(
-                """
-                INSERT OR REPLACE INTO daily_kline
+                f"""
+                INSERT OR {'IGNORE' if incremental else 'REPLACE'} INTO daily_kline
                 (ts_code, trade_date, open, high, low, close, vol, amount,
                  pct_chg, vol_ratio, is_limit_up, is_limit_down)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -179,7 +180,15 @@ def sync_us_daily(ts_code: str, start_date: str, end_date: str, *, session=None)
                     0,
                 ),
             )
-            prev_close = bar["close"]
+            written += cursor.rowcount
+            # 冲突时后续涨跌幅使用库中实际前收，不使用被忽略的响应值。
+            prev_close = cursor.execute(
+                "SELECT close FROM daily_kline WHERE ts_code=? AND trade_date=?",
+                (ts_code, bar["trade_date"]),
+            ).fetchone()[0]
+        if written:
+            from .data_freshness import record_data_change
+            record_data_change(conn, ts_code, bars[-1]["trade_date"])
 
-    logger.info("Yahoo 日线同步完成: %s, %d 条 (%s-%s)", ts_code, len(bars), start_date, end_date)
-    return len(bars)
+    logger.info("Yahoo 日线同步完成: %s, %d 条 (%s-%s)", ts_code, written, start_date, end_date)
+    return written

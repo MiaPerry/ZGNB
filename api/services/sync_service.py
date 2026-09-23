@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from modules.database import get_connection, get_db_path
+from modules.data_freshness import data_update_batch, get_data_status
 
 logger = logging.getLogger(__name__)
 
@@ -111,21 +112,17 @@ class YahooSyncer:
 
     def __init__(self, session=None):
         self._session = session
-        self._indicator_syncer = None
 
     def sync_daily_kline(self, ts_code, start_date=None, end_date=None, raise_on_error=False) -> int:
         from modules.yahoo_sync import sync_us_daily
 
         # sync_us_daily 在请求/解析失败时始终抛异常，由服务分级重试
-        return sync_us_daily(ts_code, start_date, end_date, session=self._session)
+        return sync_us_daily(ts_code, start_date, end_date, session=self._session, incremental=True)
 
-    def sync_indicator_cache(self, ts_code, days=120) -> int:
-        # 指标基于库内 K 线本地计算，不依赖 Tushare 网络；非 jnb 模式下无 token 也可构造
-        if self._indicator_syncer is None:
-            from modules.data_sync import DataSyncer
+    def sync_indicator_cache(self, ts_code) -> int:
+        from modules.data_sync import sync_indicator_cache_incremental
 
-            self._indicator_syncer = DataSyncer()
-        return self._indicator_syncer.sync_indicator_cache(ts_code, days=days)
+        return sync_indicator_cache_incremental(ts_code)
 
 
 # ==================== 任务快照 ====================
@@ -143,6 +140,9 @@ class SyncTaskSnapshot:
     processed: int = 0
     success: int = 0
     no_change: int = 0
+    no_data: int = 0
+    indicator_rows: int = 0
+    markets: dict = field(default_factory=dict)
     failed: int = 0
     new_rows: int = 0
     data_date: str | None = None  # 同步后库内实际最新行情日期
@@ -281,7 +281,8 @@ class USStockSyncService:
 
         # 写入前备份；失败则停止，不碰数据
         try:
-            backup_database(self._backup_dir / "us-hk-pre-sync.db")
+            stamp = datetime.now().strftime('%Y%m%d-%H%M%S-%f')
+            backup_database(self._backup_dir / f"us-hk-pre-sync-{stamp}-{self._snapshot.task_id}.db")
         except Exception as e:
             self._update(
                 status="failed",
@@ -291,6 +292,10 @@ class USStockSyncService:
             )
             return
 
+        with data_update_batch():
+            self._run_codes(codes)
+
+    def _run_codes(self, codes):
         syncer = self._get_syncer()
         now = self._now()
         aborted = None
@@ -305,12 +310,14 @@ class USStockSyncService:
                 break
 
             snap = self._snapshot
-            updates = {"processed": snap.processed + 1}
+            updates = {"processed": snap.processed + 1,
+                       "new_rows": snap.new_rows + outcome["added"],
+                       "indicator_rows": snap.indicator_rows + outcome.get("indicators", 0)}
             if outcome["kind"] == "success":
                 updates["success"] = snap.success + 1
-                updates["new_rows"] = snap.new_rows + outcome["added"]
-            elif outcome["kind"] == "no_change":
-                updates["no_change"] = snap.no_change + 1
+            elif outcome["kind"] in ("no_change", "no_data"):
+                kind = outcome["kind"]
+                updates[kind] = getattr(snap, kind) + 1
             else:
                 updates["failed"] = snap.failed + 1
                 updates["failures"] = snap.failures + [{"ts_code": code, "error": outcome["error"]}]
@@ -318,6 +325,7 @@ class USStockSyncService:
 
         snap = self._snapshot
         data_date = self._latest_data_date()
+        self._update(markets=get_data_status()["markets"])
         finished = datetime.now().isoformat(timespec="seconds")
         if aborted is not None:
             self._update(
@@ -341,28 +349,23 @@ class USStockSyncService:
                 status="completed",
                 phase="done",
                 data_date=data_date,
-                message="同步完成",
+                message=(f"完成，{snap.no_data} 只数据源未返回新行情，请查看实际日期" if snap.no_data else "同步完成"),
                 finished_at=finished,
             )
 
     def _sync_one(self, syncer, code: str, end_date: str) -> dict:
-        """同步单只股票，返回 {kind: success/no_change/failed, added, error}"""
+        """日线和指标分开计数；单只指标失败不阻断其他标的。"""
         start_date = self._incremental_start(code)
-        if start_date > end_date:
-            # 库内数据已覆盖查询上界，无需请求接口
-            self._recompute_if_indicator_mismatch(syncer, code)
-            return {"kind": "no_change", "added": 0}
-
-        added, error = self._sync_with_retry(syncer, code, start_date, end_date)
+        covered = start_date > end_date
+        added, error = (0, None) if covered else self._sync_with_retry(syncer, code, start_date, end_date)
         if error is not None:
             return {"kind": "failed", "added": 0, "error": error}
-
-        if added > 0:
-            self._recompute_indicators(syncer, code)
-            return {"kind": "success", "added": added}
-
-        self._recompute_if_indicator_mismatch(syncer, code)
-        return {"kind": "no_change", "added": 0}
+        try:
+            indicators = self._fill_indicators(syncer, code, added)
+        except Exception as exc:
+            return {"kind": "failed", "added": added, "error": f"指标补算失败: {exc}"}
+        kind = "success" if added else ("no_change" if covered else "no_data")
+        return {"kind": kind, "added": added, "indicators": indicators}
 
     def _incremental_start(self, code: str) -> str:
         """增量起点 = 库内真实 K 线最大日期 +1；无行情时首拉最近 730 个自然日"""
@@ -393,30 +396,15 @@ class USStockSyncService:
                 self._sleep(self._rate_limit_wait if kind == "rate_limit" else self._network_backoff * attempt)
         return None, "超过最大重试次数"
 
-    def _recompute_indicators(self, syncer, code: str):
-        """按该股票全部已有历史条数重算指标，保证递推指标预热；失败计入该股票失败"""
+    def _fill_indicators(self, syncer, code, added):
+        from modules.indicators.cache_builder import missing_dates
+
+        with get_connection() as conn:
+            missing = missing_dates(conn, code)
+        if not added and not missing:
+            return 0
         self._update(phase="indicators")
-        days = self._kline_count(code)
-        try:
-            syncer.sync_indicator_cache(code, days=days)
-        except Exception as e:
-            raise RuntimeError(f"指标重算失败: {e}") from e
-
-    def _recompute_if_indicator_mismatch(self, syncer, code: str):
-        """指标缓存条数与 K 线不一致时补算"""
-        with get_connection() as conn:
-            indicator_count = conn.execute(
-                "SELECT COUNT(*) FROM indicator_cache WHERE ts_code = ?", (code,)
-            ).fetchone()[0]
-        if indicator_count != self._kline_count(code):
-            self._recompute_indicators(syncer, code)
-
-    @staticmethod
-    def _kline_count(code: str) -> int:
-        with get_connection() as conn:
-            return conn.execute(
-                "SELECT COUNT(*) FROM daily_kline WHERE ts_code = ?", (code,)
-            ).fetchone()[0]
+        return syncer.sync_indicator_cache(code)
 
     @staticmethod
     def _latest_data_date() -> str | None:

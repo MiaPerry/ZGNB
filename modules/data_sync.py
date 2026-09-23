@@ -97,6 +97,13 @@ def _rate_limit_global() -> None:
     _GLOBAL_LIMITER.wait()
 
 
+def sync_indicator_cache_incremental(ts_code: str) -> int:
+    """仅补缺失日期，无需初始化任何行情客户端；失败向调用方传播。"""
+    from .indicators.cache_builder import write_indicator_rows
+
+    return write_indicator_rows(ts_code)
+
+
 class DataSyncer:
     """数据同步器"""
 

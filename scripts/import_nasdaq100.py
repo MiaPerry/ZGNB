@@ -14,6 +14,12 @@ NASDAQ-100 成分股导入 + 美股/港股历史回补脚本（us 分支）
     python scripts/import_nasdaq100.py --only NVDA.US,ARM.US # 只处理指定代码
     python scripts/import_nasdaq100.py --skip-indicators     # 只拉 K 线不算指标
     python scripts/import_nasdaq100.py --indicators-only     # 离线补算全部历史指标
+    python scripts/import_nasdaq100.py --latest              # 日常增量更新：纳指100 + 原有美股/港股
+    python scripts/import_nasdaq100.py --latest --dry-run    # 查看逐只增量区间，不联网不写库
+
+增量模式退出码：0=更新完成或已覆盖查询上界，1=有失败，2=数据源未返回部分新行情。
+--latest 增量更新日线并补算缺失日期指标，保留已有历史指标，不更新盘中未收盘日线。
+停牌、休市或源延迟均可能返回空数据。
 """
 
 import argparse
@@ -21,7 +27,8 @@ import json
 import logging
 import sys
 import time
-from datetime import datetime
+from contextlib import ExitStack, closing
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -90,6 +97,18 @@ def compute_backfill_start(now: datetime, years: int) -> str:
     return start.strftime("%Y%m%d")
 
 
+def plan_latest_windows(codes, fallback_start, end_by_market):
+    """逐只从已有日线的下一天补齐；无历史的股票仍按指定年数首拉。"""
+    with get_connection() as conn:
+        latest = dict(conn.execute("SELECT ts_code, MAX(trade_date) FROM daily_kline GROUP BY ts_code"))
+    windows = {}
+    for code in codes:
+        last = latest.get(code)
+        start = (datetime.strptime(last, "%Y%m%d") + timedelta(days=1)).strftime("%Y%m%d") if last else fallback_start
+        windows[code] = (start, end_by_market[_market_of(code)])
+    return windows
+
+
 def upsert_stock_basic(conn, constituents: list[dict]) -> None:
     """写入成分股基本信息：新股票插入；已有股票不改名，仅补齐空板块"""
     cursor = conn.cursor()
@@ -126,25 +145,29 @@ def _fetch_with_retry(fetch, ts_code, start_date, end_date, sleep):
     return None, "超过最大重试次数"
 
 
-def run_import(codes, start_date, end_date, fetch, recompute, sleep=time.sleep, pace=DEFAULT_PACE, on_progress=None):
+def run_import(codes, start_date, end_date, fetch, recompute, sleep=time.sleep, pace=DEFAULT_PACE, on_progress=None, windows=None):
     """
-    逐只回补并重算指标
+    逐只下载日线，可选执行指标计算
 
     Args:
         fetch: (ts_code, start_date, end_date) -> 写入条数，失败抛异常
-        recompute: (ts_code) -> None，指标重算，失败抛异常
+        recompute: (ts_code) -> None，指标重算，失败抛异常；传 None 时不处理指标
+        windows: 可选的 {代码: (增量起点, 市场上界)}，已覆盖时跳过下载
     Returns:
-        {"success", "no_data", "failed", "rows", "failures": [{ts_code, error}]}
+        {"success", "no_data", "no_change", "failed", "rows", "failures": [{ts_code, error}]}
     """
-    summary = {"success": 0, "no_data": 0, "failed": 0, "rows": 0, "failures": []}
+    summary = {"success": 0, "no_data": 0, "no_change": 0, "failed": 0, "rows": 0, "indicator_rows": 0, "failures": []}
     for i, code in enumerate(codes, 1):
-        rows, error = _fetch_with_retry(fetch, code, start_date, end_date, sleep)
-        if error is None and rows:
+        start, end = windows[code] if windows is not None else (start_date, end_date)
+        covered = start > end
+        rows, error = (0, None) if covered else _fetch_with_retry(fetch, code, start, end, sleep)
+        if error is None:
             summary["rows"] += rows
             try:
-                recompute(code)
+                if recompute is not None and (rows or windows is not None):
+                    summary["indicator_rows"] += recompute(code) or 0
             except Exception as e:
-                error = f"指标重算失败: {e}"
+                error = f"指标计算失败: {e}"
 
         if error is not None:
             summary["failed"] += 1
@@ -153,13 +176,16 @@ def run_import(codes, start_date, end_date, fetch, recompute, sleep=time.sleep, 
         elif rows:
             summary["success"] += 1
             state = f"{rows} 条"
+        elif covered:
+            summary["no_change"] += 1
+            state = "已覆盖查询上界，无需下载"
         else:
             summary["no_data"] += 1
-            state = "无数据"
+            state = "数据源未返回区间内新行情" if windows is not None else "无数据"
 
         if on_progress:
             on_progress(i, len(codes), code, state)
-        if pace and i < len(codes):
+        if pace and not covered and i < len(codes):
             sleep(pace)
     return summary
 
@@ -173,10 +199,10 @@ def create_import_backup():
     return backup_database(get_db_path().parent / "backups" / f"pre-nasdaq100-{stamp}.db")
 
 
-def _make_fetch(session):
+def _make_fetch(session, *, overwrite=True):
     from modules.yahoo_sync import sync_us_daily
 
-    return lambda ts_code, start_date, end_date: sync_us_daily(ts_code, start_date, end_date, session=session)
+    return lambda ts_code, start_date, end_date: sync_us_daily(ts_code, start_date, end_date, session=session, incremental=not overwrite)
 
 
 def _make_recompute():
@@ -190,12 +216,13 @@ def _make_recompute():
         written = syncer.sync_indicator_cache(ts_code, days=days)
         if written != days or days == 0:
             raise RuntimeError(f"指标未完整写入 {ts_code}: {written}/{days}")
+        return written
 
     return recompute
 
 
-def main():
-    p = argparse.ArgumentParser(description="NASDAQ-100 导入 + 美股/港股历史回补")
+def main(argv=None):
+    p = argparse.ArgumentParser(description="NASDAQ-100 + 原有美股/港股：历史回补或 --latest 增量更新")
     p.add_argument("--list", default=str(DEFAULT_LIST_PATH), help="成分股 JSON 文件")
     p.add_argument("--years", type=int, default=5, help="回补年数（默认 5）")
     p.add_argument("--no-existing", action="store_true", help="不回补库内现有美股/港股，只处理成分股")
@@ -205,9 +232,14 @@ def main():
     mode.add_argument("--indicators-only", action="store_true", help="离线重算指标，不下载日线")
     p.add_argument("--pace", type=float, default=DEFAULT_PACE, help="相邻请求间隔秒数")
     p.add_argument("--dry-run", action="store_true", help="只打印计划，不联网不写库")
-    args = p.parse_args()
+    p.add_argument("--latest", action="store_true", help="增量更新日线并补齐缺失指标，不覆盖已有历史指标")
+    args = p.parse_args(argv)
     if not 1 <= args.years <= 50 or args.pace < 0:
         p.error("years 必须为 1~50，pace 不能为负数")
+    if args.latest and args.indicators_only:
+        p.error("--latest 与 --indicators-only 不能同时使用")
+    if not get_db_path().is_file():
+        p.error(f"数据库不存在，请检查 DB_PATH：{get_db_path()}")
 
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
     if hasattr(sys.stdout, "reconfigure"):
@@ -225,57 +257,97 @@ def main():
     now = _beijing_now()
     start_date = compute_backfill_start(now, args.years)
     end_by_market = {m: compute_market_end_date(now, m) for m in ("US", "HK")}
+    windows = plan_latest_windows(codes, start_date, end_by_market) if args.latest else None
 
     print("=" * 60)
-    print(f"NASDAQ-100 导入 / 历史回补 — 库: {get_db_path()}")
-    print(f"成分股 {len(constituents)} 只，待处理 {len(codes)} 只，区间 {start_date} ~ US:{end_by_market['US']} HK:{end_by_market['HK']}")
+    label = "最新行情增量更新" if args.latest else "NASDAQ-100 导入 / 历史回补"
+    print(f"{label} — 库: {get_db_path()}")
+    print(f"成分股 {len(constituents)} 只，待处理 {len(codes)} 只，目标日 US:{end_by_market['US']} HK:{end_by_market['HK']}")
+    if not args.latest:
+        print(f"历史回补起点 {start_date}")
     print("=" * 60)
+    if args.latest:
+        pending = sum(start <= end for start, end in windows.values())
+        print(f"需查询 {pending} 只，已覆盖查询上界 {len(codes) - pending} 只；增量日线并补齐缺失指标")
+    if args.skip_indicators:
+        print("注意：本次仅更新日线，指标未更新，分析可能尚未就绪。")
     if args.dry_run:
         for c in codes:
-            print("  ", c)
+            if windows is None:
+                print("  ", c)
+            else:
+                start, end = windows[c]
+                print(f"  {c:<10} {start} ~ {end}" if start <= end else f"  {c:<10} 已覆盖查询上界")
         print("\n[dry-run] 未联网、未写库")
-        return
+        return 0
 
     backup = create_import_backup()
     print(f"已备份到 {backup}")
 
-    if args.indicators_only:
-        def fetch(code, _start, _end):
-            with get_connection() as conn:
-                return conn.execute("SELECT COUNT(*) FROM daily_kline WHERE ts_code = ?", (code,)).fetchone()[0]
-    else:
-        selected = [c for c in constituents if c["ts_code"] in codes]
-        with get_connection() as conn:
-            upsert_stock_basic(conn, selected)
-        print(f"stock_basic 已写入/补齐 {len(selected)} 只成分股")
-        from modules.yahoo_sync import _default_session
+    indicator_worker = None
 
-        fetch = _make_fetch(_default_session())
-    recompute = (lambda code: None) if args.skip_indicators else _make_recompute()
+    def recompute(code):
+        nonlocal indicator_worker
+        if args.skip_indicators:
+            return
+        if args.latest:
+            from modules.data_sync import sync_indicator_cache_incremental
+            return sync_indicator_cache_incremental(code)
+        print(f"    {code} 正在重算全历史指标……", flush=True)
+        if indicator_worker is None:
+            indicator_worker = _make_recompute()
+        return indicator_worker(code)
 
     def progress(i, total, code, state):
         print(f"  [{i}/{total}] {code:<10} {state}", flush=True)
 
     t0 = time.time()
-    # 各市场查询上界不同：按代码所属市场逐只传入
-    summary = run_import(
-        codes,
-        start_date,
-        end_by_market["US"],
-        fetch=lambda code, s, _e: fetch(code, s, end_by_market.get(_market_of(code), end_by_market["US"])),
-        recompute=recompute,
-        pace=0 if args.indicators_only else args.pace,
-        on_progress=progress,
-    )
+    with ExitStack() as resources:
+        from modules.data_freshness import data_update_batch
+        resources.enter_context(data_update_batch())
+        if args.indicators_only:
+            def fetch(code, _start, _end):
+                with get_connection() as conn:
+                    return conn.execute("SELECT COUNT(*) FROM daily_kline WHERE ts_code = ?", (code,)).fetchone()[0]
+        else:
+            selected = [c for c in constituents if c["ts_code"] in codes]
+            with get_connection() as conn:
+                upsert_stock_basic(conn, selected)
+            print(f"stock_basic 已写入/补齐 {len(selected)} 只成分股")
+            from modules.yahoo_sync import _default_session
+
+            if windows is None or any(start <= end for start, end in windows.values()):
+                session = resources.enter_context(closing(_default_session()))
+                fetch = _make_fetch(session, overwrite=not args.latest)
+            else:
+                def fetch(*_):
+                    return 0
+        # 各市场查询上界不同：按代码所属市场逐只传入
+        summary = run_import(
+            codes,
+            start_date,
+            end_by_market["US"],
+            fetch=lambda code, s, _e: fetch(code, s, end_by_market.get(_market_of(code), end_by_market["US"])),
+            recompute=None if args.skip_indicators else recompute,
+            pace=0 if args.indicators_only else args.pace,
+            on_progress=progress,
+            windows=windows,
+        )
 
     print("\n" + "=" * 60)
     print(
         f"完成，用时 {time.time() - t0:.0f}s：成功 {summary['success']} · 无数据 {summary['no_data']} "
-        f"· 失败 {summary['failed']} · 处理（含覆盖） {summary['rows']} 条"
+        f"· 失败 {summary['failed']} · 日线 {summary['rows']} 条 · 指标 {summary['indicator_rows']} 条"
     )
+    if args.latest:
+        print(f"无需下载 {summary['no_change']} 只")
+        if summary["no_data"]:
+            print("注意：部分查询未返回新行情，可能为休市、停牌或源延迟；未视为已更新，请稍后重跑。")
     for f in summary["failures"]:
         print(f"  ✗ {f['ts_code']}: {f['error']}")
     print("=" * 60)
+    if args.latest:
+        return 1 if summary["failed"] else (2 if summary["no_data"] else 0)
     return 1 if summary["failed"] or summary["no_data"] else 0
 
 

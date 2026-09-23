@@ -109,11 +109,11 @@ class FakeSyncer:
             raise outcome
         return outcome
 
-    def sync_indicator_cache(self, ts_code, days=120):
-        self.indicator_calls.append((ts_code, days))
+    def sync_indicator_cache(self, ts_code):
+        self.indicator_calls.append(ts_code)
         if self._indicator_error is not None:
             raise self._indicator_error
-        return days
+        return 1
 
 
 FIXED_NOW = datetime(2026, 9, 20, 10, 0)  # 周日 10 点北京 → 美股/港股查询上界均为 20260918
@@ -186,7 +186,7 @@ def test_up_to_date_stock_skips_api_call(temp_db, db_conn, tmp_path):
     assert final.no_change == 1
 
 
-def test_no_new_data_counts_as_no_change(temp_db, db_conn, tmp_path):
+def test_no_new_data_counts_as_no_data(temp_db, db_conn, tmp_path):
     """接口成功返回空数据计为无新增，不是失败"""
     _write_kline(db_conn, "AAPL.US", "20260917")
     db_conn.execute(
@@ -199,31 +199,32 @@ def test_no_new_data_counts_as_no_change(temp_db, db_conn, tmp_path):
     _, final = _run_and_wait(_make_service(syncer, tmp_path))
 
     assert final.status == "completed"
-    assert final.no_change == 1
+    assert final.no_data == 1
+    assert final.no_change == 0
     assert final.failed == 0
     assert syncer.indicator_calls == []
 
 
-def test_indicator_mismatch_triggers_recompute(temp_db, db_conn, tmp_path):
-    """指标缓存条数与 K 线不一致时，即使无新增也重算指标"""
+def test_indicator_gap_triggers_incremental_compute(temp_db, db_conn, tmp_path):
+    """无新增行情时，也会进入缺失日期补算入口。"""
     _write_kline(db_conn, "AAPL.US", "20260917")
     _write_kline(db_conn, "AAPL.US", "20260918")
     syncer = FakeSyncer(outcomes={"AAPL.US": [0]})
 
     _, final = _run_and_wait(_make_service(syncer, tmp_path))
 
-    assert syncer.indicator_calls == [("AAPL.US", 2)]  # days=该股票全部 K 线条数
+    assert syncer.indicator_calls == ["AAPL.US"]
     assert final.status == "completed"
 
 
-def test_new_data_recomputes_indicators_with_full_history(temp_db, db_conn, tmp_path):
-    """有新增行情时按全部历史条数重算指标，预热递推指标"""
+def test_new_data_uses_incremental_indicators(temp_db, db_conn, tmp_path):
+    """新行情只调用增量入口，不传入全历史重算天数。"""
     _write_kline(db_conn, "AAPL.US", "20260917")
     syncer = FakeSyncer(outcomes={"AAPL.US": [1]})
 
     _run_and_wait(_make_service(syncer, tmp_path))
 
-    assert syncer.indicator_calls == [("AAPL.US", 1)]
+    assert syncer.indicator_calls == ["AAPL.US"]
 
 
 def test_failed_stock_not_counted_as_no_change(temp_db, db_conn, tmp_path):
@@ -278,8 +279,9 @@ def test_backup_created_before_sync(temp_db, db_conn, tmp_path):
 
     _run_and_wait(_make_service(syncer, tmp_path))
 
-    backup = tmp_path / "backups" / "us-hk-pre-sync.db"
-    assert backup.exists()
+    backups = list((tmp_path / "backups").glob("us-hk-pre-sync-*.db"))
+    assert len(backups) == 1
+    backup = backups[0]
     import sqlite3
 
     with sqlite3.connect(backup) as conn:
@@ -347,6 +349,17 @@ def test_real_incremental_sync_preserves_personal_data(temp_db, db_conn, tmp_pat
     assert final.data_date == "20260918"
     for table in tables:
         assert [tuple(row) for row in db_conn.execute(f"SELECT * FROM {table}")] == before[table]
+
+
+def test_indicator_failure_keeps_daily_count_and_continues(temp_db, db_conn, tmp_path):
+    _write_kline(db_conn, "AAPL.US", "20260917")
+    _write_kline(db_conn, "ADI.US", "20260917")
+    syncer = FakeSyncer(outcomes={"AAPL.US": [1], "ADI.US": [2]}, indicator_error=ValueError("指标失败"))
+    _, final = _run_and_wait(_make_service(syncer, tmp_path))
+    assert final.processed == 2
+    assert final.failed == 2
+    assert final.new_rows == 3
+    assert all("指标" in f["error"] for f in final.failures)
 
 
 def test_proxy_failure_is_failed_and_safe_in_task_status(temp_db, db_conn, tmp_path, caplog):

@@ -109,6 +109,19 @@ def test_submit_works_without_tushare_token(temp_db, db_conn, tmp_path, monkeypa
     assert service.wait_for_completion(timeout=10)
 
 
+def test_data_status_is_read_only_and_reports_gaps(api_env):
+    client, _, _, conn = api_env
+    write_klines_to_db(conn, [{"ts_code": "AAPL.US", "trade_date": "20260918", "open": 1,
+                             "high": 1, "low": 1, "close": 1, "vol": 1, "amount": 1, "pct_chg": 0}])
+    before = conn.execute('SELECT COUNT(*) FROM sync_log').fetchone()[0]
+    response = client.get('/api/v1/system/data/status')
+    assert response.status_code == 200
+    body = response.json()
+    assert body['stocks']['AAPL.US']['missing_indicators'] == 1
+    assert not body['ready']
+    assert conn.execute('SELECT COUNT(*) FROM sync_log').fetchone()[0] == before
+
+
 def test_existing_sync_log_endpoint_unchanged(api_env):
     """既有 /sync/status 日志接口返回结构保持不变"""
     client, *_ = api_env

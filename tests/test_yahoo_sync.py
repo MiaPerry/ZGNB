@@ -149,6 +149,21 @@ def test_sync_us_daily_writes_bars_with_derived_fields(temp_db, db_conn):
     assert row[3] == pytest.approx(-0.2582, abs=1e-4)
 
 
+def test_incremental_conflict_preserves_bar_and_version(temp_db, db_conn):
+    from modules.yahoo_sync import sync_us_daily
+    from modules.data_freshness import get_data_status
+
+    payload = _chart_payload([1789738200],
+        {"open": [100], "high": [102], "low": [99], "close": [101], "volume": [100]}, -14400)
+    assert sync_us_daily("AAPL.US", "20260918", "20260918", session=FakeSession([FakeResponse(payload)]), incremental=True) == 1
+    before = tuple(db_conn.execute("SELECT * FROM daily_kline").fetchone())
+    version = get_data_status()["version"]
+    payload["chart"]["result"][0]["indicators"]["quote"][0]["close"] = [102]
+    assert sync_us_daily("AAPL.US", "20260918", "20260918", session=FakeSession([FakeResponse(payload)]), incremental=True) == 0
+    assert tuple(db_conn.execute("SELECT * FROM daily_kline").fetchone()) == before
+    assert get_data_status()["version"] == version
+
+
 def test_sync_us_daily_filters_out_of_range_bars(temp_db, db_conn):
     """区间外的 bar 不写入；返回实际新增条数"""
     from modules.yahoo_sync import sync_us_daily

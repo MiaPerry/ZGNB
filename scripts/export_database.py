@@ -45,6 +45,11 @@ def export_database(source: Path, output: Path | None = None) -> dict:
             conn.execute("PRAGMA journal_mode=DELETE")
             if conn.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
                 raise ValueError("导出快照完整性校验失败")
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sync_log'").fetchone():
+                from modules.data_freshness import rotate_data_epoch
+                rotate_data_epoch(conn)
+                conn.execute("UPDATE sync_log SET status='finished' WHERE data_type='data_batch'")
+                conn.commit()
             tables = {}
             for (name,) in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"

@@ -19,6 +19,9 @@ class BatchSyncSnapshot(BaseModel):
     processed: int = 0
     success: int = 0
     no_change: int = 0
+    no_data: int = 0
+    indicator_rows: int = 0
+    markets: dict = {}
     failed: int = 0
     new_rows: int = 0
     data_date: str | None = None

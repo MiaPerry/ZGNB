@@ -79,7 +79,7 @@ def detect_volume_anomaly(klines: list[DailyData]) -> dict:
     return result
 
 
-def calculate_sell_score(klines: list[DailyData]) -> tuple[int, str, dict[str, bool]]:
+def calculate_sell_score(klines: list[DailyData], *, context=None) -> tuple[int, str, dict[str, bool]]:
     """
     计算防卖飞评分 V1.4（5分制）
 
@@ -141,7 +141,7 @@ def calculate_sell_score(klines: list[DailyData]) -> tuple[int, str, dict[str, b
 
     # 5. J 没死叉？
     if len(klines) >= 9:
-        k, d, j = calculate_kdj(klines)
+        k, d, j = context["kdj"] if context is not None else calculate_kdj(klines)
         j_ok = j >= d or j < 80  # J没有从高位下穿
         items["KDJ未死叉"] = j_ok
         if not j_ok:
@@ -152,7 +152,7 @@ def calculate_sell_score(klines: list[DailyData]) -> tuple[int, str, dict[str, b
     return score, reason_str, items
 
 
-def detect_trade_signal(klines: list[DailyData]) -> TradeSignal:
+def detect_trade_signal(klines: list[DailyData], *, context=None) -> TradeSignal:
     """
     检测交易信号（集成 MACD 一票否决权）
 
@@ -169,8 +169,8 @@ def detect_trade_signal(klines: list[DailyData]) -> TradeSignal:
     yesterday = klines[-2]
 
     # 计算当前指标
-    k, d, j = calculate_kdj(klines)
-    dif_list, dea_list, macd_list = calculate_macd(klines)
+    k, d, j = context["kdj"] if context is not None else calculate_kdj(klines)
+    dif_list, dea_list, macd_list = context["macd"] if context is not None else calculate_macd(klines)
     macd_list[-1] if macd_list else 0
 
     # MACD 语料判断
@@ -210,7 +210,7 @@ def detect_trade_signal(klines: list[DailyData]) -> TradeSignal:
     if j > -10 and j < 55:
         prev_j_list = []
         for i in range(2, min(10, len(klines))):
-            pk, pd, pj = calculate_kdj(klines[:-i])
+            pk, pd, pj = context["kdj_history"][-i - 1] if context is not None else calculate_kdj(klines[:-i])
             prev_j_list.append(pj)
 
         if any(pj < -10 for pj in prev_j_list):

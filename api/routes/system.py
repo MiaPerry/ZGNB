@@ -28,6 +28,13 @@ def health_check():
     }
 
 
+@router.get("/data/status")
+def data_status():
+    """只读的数据版本、实际交易日与指标就绪状态。"""
+    from modules.data_freshness import get_data_status
+    return get_data_status()
+
+
 @router.get("/sync/status")
 def sync_status():
     """获取数据同步状态"""

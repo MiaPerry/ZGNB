@@ -94,6 +94,25 @@ def test_compute_backfill_start():
     assert compute_backfill_start(datetime(2026, 9, 22, 10, 0), years=5) == "20210922"
 
 
+def test_latest_windows_use_each_stock_last_date_and_market(temp_db, db_conn):
+    from scripts.import_nasdaq100 import plan_latest_windows
+
+    write_klines_to_db(db_conn, [
+        {"ts_code": code, "trade_date": date, "open": 1, "high": 1, "low": 1,
+         "close": 1, "vol": 1, "amount": 1, "pct_chg": 0}
+        for code, date in [("AAPL.US", "20260921"), ("02331.HK", "20260922")]
+    ])
+    windows = plan_latest_windows(
+        ["AAPL.US", "02331.HK", "ARM.US"], "20210923", {"US": "20260922", "HK": "20260922"}
+    )
+
+    assert windows == {
+        "AAPL.US": ("20260922", "20260922"),
+        "02331.HK": ("20260923", "20260922"),
+        "ARM.US": ("20210923", "20260922"),
+    }
+
+
 # ==================== stock_basic 写入 ====================
 
 
@@ -252,3 +271,89 @@ def test_indicators_only_does_not_fetch(temp_db, db_conn, monkeypatch):
     monkeypatch.setattr(module, "_make_fetch", lambda *a: pytest.fail("不应联网"))
     assert module.main() == 0
     assert called == ["ADI.US"]
+
+
+def test_latest_import_skips_covered_dates_and_distinguishes_empty_source(temp_db):
+    from scripts.import_nasdaq100 import run_import
+
+    fetcher = FakeFetcher({"A.US": [1], "B.US": [0]})
+    indicator_calls = []
+    summary = run_import(
+        ["A.US", "B.US", "C.US"], "20210923", "20260922", fetcher,
+        indicator_calls.append, sleep=lambda _: None, pace=0,
+        windows={"A.US": ("20260922", "20260922"),
+                 "B.US": ("20260922", "20260922"),
+                 "C.US": ("20260923", "20260922")},
+    )
+    assert fetcher.calls == [("A.US", "20260922", "20260922"), ("B.US", "20260922", "20260922")]
+    assert indicator_calls == ["A.US", "B.US", "C.US"]
+    assert (summary["success"], summary["no_data"], summary["no_change"], summary["rows"]) == (1, 1, 1, 1)
+
+
+def test_latest_repairs_missing_indicators_without_fetch(temp_db, db_conn):
+    from scripts.import_nasdaq100 import run_import
+
+    write_klines_to_db(db_conn, [{"ts_code": "A.US", "trade_date": "20260922",
+        "open": 1, "high": 1, "low": 1, "close": 1, "vol": 1, "amount": 1, "pct_chg": 0}])
+    fetcher, called = FakeFetcher(), []
+    summary = run_import(
+        ["A.US"], "20210923", "20260922", fetcher, called.append, pace=0,
+        windows={"A.US": ("20260923", "20260922")},
+    )
+    assert fetcher.calls == []
+    assert called == ["A.US"]
+    assert summary["no_change"] == 1
+
+
+@pytest.mark.parametrize("rows,expected_exit", [(1, 0), (0, 2), (ConnectionError("timeout"), 1)])
+def test_latest_cli_incremental_window_exit_and_session_cleanup(temp_db, db_conn, monkeypatch, rows, expected_exit):
+    from unittest.mock import Mock
+    from modules import yahoo_sync
+    from scripts import import_nasdaq100 as module
+
+    write_klines_to_db(db_conn, [{"ts_code": "ADI.US", "trade_date": "20260921",
+        "open": 1, "high": 1, "low": 1, "close": 1, "vol": 1, "amount": 1, "pct_chg": 0}])
+    session, fetcher = Mock(), FakeFetcher({"ADI.US": [rows]})
+    monkeypatch.setattr(yahoo_sync, "_default_session", lambda: session)
+    monkeypatch.setattr(module, "_make_fetch", lambda s, **kwargs: fetcher)
+    monkeypatch.setattr(module, "_beijing_now", lambda: datetime(2026, 9, 23, 15))
+    monkeypatch.setattr(module, "NETWORK_BACKOFF", 0)
+    monkeypatch.setattr(module, "_make_recompute", lambda: pytest.fail("日常更新不应重算历史指标"))
+    result = module.main(["--latest", "--only", "ADI.US", "--pace", "0"])
+    assert result == expected_exit
+    assert all(call == ("ADI.US", "20260922", "20260922") for call in fetcher.calls)
+    session.close.assert_called_once()
+
+
+def test_latest_dry_run_has_no_fetch_backup_or_write(temp_db, db_conn, monkeypatch, capsys):
+    from scripts import import_nasdaq100 as module
+    from modules import yahoo_sync
+
+    monkeypatch.setattr(module, "create_import_backup", lambda: pytest.fail("不应备份"))
+    monkeypatch.setattr(yahoo_sync, "_default_session", lambda: pytest.fail("不应联网"))
+    monkeypatch.setattr(module, "upsert_stock_basic", lambda *a: pytest.fail("不应写库"))
+    assert module.main(["--latest", "--dry-run", "--only", "ADI.US"]) == 0
+    assert "ADI.US" in capsys.readouterr().out
+    assert db_conn.execute("SELECT COUNT(*) FROM stock_basic").fetchone()[0] == 0
+
+
+def test_latest_stops_before_fetch_if_backup_fails(temp_db, monkeypatch):
+    from scripts import import_nasdaq100 as module
+    from modules import yahoo_sync
+
+    def fail_backup():
+        raise OSError("backup unavailable")
+
+    monkeypatch.setattr(module, "create_import_backup", fail_backup)
+    monkeypatch.setattr(yahoo_sync, "_default_session", lambda: pytest.fail("备份失败后不应联网"))
+    monkeypatch.setattr(module, "upsert_stock_basic", lambda *a: pytest.fail("备份失败后不应写库"))
+    with pytest.raises(OSError, match="backup unavailable"):
+        module.main(["--latest", "--only", "ADI.US"])
+
+
+def test_latest_rejects_indicators_only(temp_db):
+    from scripts import import_nasdaq100 as module
+
+    with pytest.raises(SystemExit) as exc:
+        module.main(["--latest", "--indicators-only"])
+    assert exc.value.code == 2

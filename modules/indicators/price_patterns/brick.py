@@ -2,6 +2,24 @@ from ..core import DailyData, calculate_ma, calculate_sma_series, calculate_slop
 from .base import calculate_zg_white
 
 
+def precompute_brick_sequence(klines: list[DailyData]) -> list[float]:
+    """一次递推全部砖值，保持短历史、SMA初始化和两位舍入口径。"""
+    result = [0.0] * len(klines)
+    v1s, v3s = [], []
+    for i in range(3, len(klines)):
+        recent = klines[i - 3:i + 1]
+        high, low = max(b.high for b in recent), min(b.low for b in recent)
+        close = klines[i].close
+        v1s.append((high - close) / (high - low) * 100 - 90 if high != low else -90.)
+        v3s.append((close - low) / (high - low) * 100 if high != low else 50.)
+    v2s = calculate_sma_series(v1s, 4, 1)
+    v5s = calculate_sma_series(calculate_sma_series(v3s, 6, 1), 6, 1)
+    for i in range(11, len(klines)):
+        value = (v5s[i - 3] + 100) - (v2s[i - 3] + 100)
+        result[i] = round(value - 4 if value > 4 else 0, 2)
+    return result
+
+
 def calculate_brick_value(klines: list[DailyData]) -> float:
     """
     计算砖型图数值（通达信标准公式 - 短期砖型图指标v2026）
@@ -138,8 +156,8 @@ def detect_brick_trend(klines: list[DailyData]) -> bool:
 
     # 计算命值序列
     ming_values = []
-    for i in range(113, len(klines)):
-        sub = closes[: i + 1]
+    for i in range(max(113, len(klines) - 8), len(klines)):
+        sub = closes[max(0, i - 113): i + 1]
         ma14 = calculate_ma(sub, 14)
         ma28 = calculate_ma(sub, 28)
         ma57 = calculate_ma(sub, 57)
