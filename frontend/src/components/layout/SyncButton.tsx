@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { useBatchSync } from '../../hooks/useBatchSync';
+import { useDataStatus } from '../../hooks/useDataStatus';
 
 /** 后端阶段码 → 展示文案（展示层格式化，不涉及数据口径） */
 const PHASE_LABELS: Record<string, string> = {
   idle: '空闲',
   backup: '备份数据',
   sync: '同步日线',
-  indicators: '重算指标',
+  indicators: '补算缺失指标',
   done: '完成',
 };
 
@@ -21,6 +22,8 @@ const STATUS_LABELS: Record<string, string> = {
 export default function SyncButton() {
   const { snapshot, isRunning, start, isStarting, startError, statusUnreachable } =
     useBatchSync();
+  // 布局级数据状态观察入口：空闲低频检查，任务终态后立即检查
+  const { data: dataStatus } = useDataStatus();
   const [panelOpen, setPanelOpen] = useState(false);
 
   const running = isRunning || isStarting;
@@ -114,14 +117,30 @@ export default function SyncButton() {
                   <div className="flex justify-between">
                     <span className="text-text-muted">结果</span>
                     <span>
-                      成功 {snapshot.success} · 无新增 {snapshot.no_change} · 失败 {snapshot.failed}
+                      成功 {snapshot.success} · 无新增 {snapshot.no_change} · 无返回 {snapshot.no_data} · 失败 {snapshot.failed}
                     </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-text-muted">补算指标</span>
+                    <span>{snapshot.indicator_rows} 条</span>
                   </div>
                   {snapshot.data_date && (
                     <div className="flex justify-between">
                       <span className="text-text-muted">数据日期</span>
                       <span className="font-mono">{snapshot.data_date}</span>
                     </div>
+                  )}
+                  {Object.entries(snapshot.markets ?? {}).map(([market, info]) => (
+                    <div key={market} className="flex justify-between">
+                      <span className="text-text-muted">{market === 'US' ? '美股' : market === 'HK' ? '港股' : market}实际日期</span>
+                      <span className="font-mono">
+                        {info.latest_date ?? '--'}
+                        {info.not_ready > 0 ? `（${info.not_ready} 只未就绪）` : ''}
+                      </span>
+                    </div>
+                  ))}
+                  {dataStatus && !dataStatus.ready && !running && (
+                    <p className="text-accent-gold">部分标的指标未就绪，下次增量更新会自动补算。</p>
                   )}
                   {snapshot.message && (
                     <p className="text-text-muted">{snapshot.message}</p>

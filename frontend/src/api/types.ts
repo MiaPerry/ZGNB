@@ -233,6 +233,9 @@ export interface BacktestResult {
   summary: BacktestSummary;
   equity_curve: [string, number][];
   trades: BacktestTrade[];
+  /** 结果绑定的数据版本与实际截止日期，用于过期提示 */
+  data_version?: string;
+  data_date?: string | null;
 }
 
 export interface BacktestSummary {
@@ -318,4 +321,6 @@ export interface CommentaryResponse {
   model_used: string;
   cached: boolean;
   error?: string;
+  /** 生成时绑定的标的数据版本 */
+  data_version?: string;
 }

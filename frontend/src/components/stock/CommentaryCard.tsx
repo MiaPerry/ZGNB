@@ -1,4 +1,5 @@
 import { useCommentary } from '../../hooks/useStockAnalysis';
+import { useDataStatus } from '../../hooks/useDataStatus';
 import type { CommentaryResponse } from '../../api/types';
 
 interface Props {
@@ -121,10 +122,17 @@ function Skeleton() {
 }
 
 export default function CommentaryCard({ tsCode }: Props) {
-  const { data, isLoading, isError, error, refetch } = useCommentary(tsCode);
+  const { data, isLoading, isError, error, refetch, isFetching } = useCommentary(tsCode);
+  const { data: dataStatus } = useDataStatus();
 
   const isNotConfigured = (error as any)?.response?.status === 503;
   const isFailed = (error as any)?.response?.status === 502;
+
+  // 点评绑定生成时的数据版本；标的版本变化后仅提示，不自动重新生成（付费调用）
+  const currentVersion = dataStatus?.stocks?.[tsCode]?.version;
+  const isStale = Boolean(
+    data?.data_version && currentVersion && currentVersion !== data.data_version
+  );
 
   return (
     <div className="relative overflow-hidden rounded-2xl border border-accent-gold/30 bg-gradient-to-br from-bg-card via-bg-secondary to-bg-card shadow-[0_0_40px_-15px_rgba(245,158,11,0.25)]">
@@ -164,7 +172,12 @@ export default function CommentaryCard({ tsCode }: Props) {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {data?.cached && (
+          {isStale && (
+            <span className="text-[10px] text-accent-gold bg-accent-gold/10 border border-accent-gold/40 px-2 py-1 rounded-full font-bold">
+              数据已更新
+            </span>
+          )}
+          {data?.cached && !isStale && (
             <span className="text-[10px] text-text-muted bg-bg-hover/60 px-2 py-1 rounded-full border border-border/30">
               已缓存
             </span>
@@ -172,10 +185,11 @@ export default function CommentaryCard({ tsCode }: Props) {
           {data && !isLoading && (
             <button
               onClick={() => refetch()}
-              className="text-text-muted hover:text-accent-gold transition-all text-xs px-2.5 py-1 rounded-md hover:bg-accent-gold/10 border border-transparent hover:border-accent-gold/30 hover:shadow-sm"
-              title="重新生成"
+              disabled={isFetching}
+              className="text-text-muted hover:text-accent-gold transition-all text-xs px-2.5 py-1 rounded-md hover:bg-accent-gold/10 border border-transparent hover:border-accent-gold/30 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
+              title={isStale ? `点评基于 ${data.trade_date}，数据已更新，点击重新生成` : '重新生成'}
             >
-              ↻ 刷新
+              {isFetching ? '生成中…' : '↻ 刷新'}
             </button>
           )}
         </div>
@@ -220,7 +234,14 @@ export default function CommentaryCard({ tsCode }: Props) {
         )}
 
         {data && !isLoading && data.commentary_text && !data.error && (
-          <CommentaryBody data={data} />
+          <>
+            {isStale && (
+              <div className="mb-4 rounded-lg border border-accent-gold/30 bg-accent-gold/[0.06] px-4 py-2 text-xs text-accent-gold">
+                此点评基于 {data.trade_date} 的数据生成，行情已有更新；点击右上角“刷新”重新生成。
+              </div>
+            )}
+            <CommentaryBody data={data} />
+          </>
         )}
       </div>
     </div>

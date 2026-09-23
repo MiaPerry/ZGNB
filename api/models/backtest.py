@@ -60,6 +60,8 @@ class BacktestResponse(BaseModel):
     summary: BacktestSummary
     equity_curve: list[list] = []  # [[date, value], ...]
     trades: list[BacktestTradeItem] = []
+    data_version: str = ""
+    data_date: str | None = None
 
 
 class PortfolioBacktestResponse(BaseModel):
@@ -67,3 +69,5 @@ class PortfolioBacktestResponse(BaseModel):
     equity_curve: list[list] = []
     trades: list[dict] = []
     per_stock: list[BacktestResponse] = []
+    data_version: str = ""
+    data_date: str | None = None

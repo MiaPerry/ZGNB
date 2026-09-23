@@ -33,6 +33,9 @@ def test_to_yahoo_symbol_hk_strips_leading_zero():
 
     assert to_yahoo_symbol("02331.HK") == "2331.HK"
     assert to_yahoo_symbol("09992.HK") == "9992.HK"
+    # 去前导零后不足 4 位需左补零（腾讯 00700 → 0700，汇丰 00005 → 0005）
+    assert to_yahoo_symbol("00700.HK") == "0700.HK"
+    assert to_yahoo_symbol("00005.HK") == "0005.HK"
 
 
 # ==================== Chart JSON 解析 ====================

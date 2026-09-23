@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { runShaofu } from '../api/backtest';
+import { useDataStatus } from '../hooks/useDataStatus';
 import type { BacktestResult } from '../api/types';
 import Card from '../components/ui/Card';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
@@ -11,11 +12,20 @@ export default function Backtest() {
   const [tsCode, setTsCode] = useState('');
   const [days, setDays] = useState(250);
   const [result, setResult] = useState<BacktestResult | null>(null);
+  const { data: dataStatus } = useDataStatus();
 
   const mutation = useMutation({
     mutationFn: () => runShaofu({ ts_code: tsCode, days }),
     onSuccess: (data) => setResult(data),
   });
+
+  // 回测结果绑定生成时的数据版本；行情更新后仅提示，由用户手动重跑（重任务）
+  const currentVersion = result?.data_version
+    ? (dataStatus?.stocks?.[result.ts_code]?.version ?? dataStatus?.version)
+    : undefined;
+  const isStale = Boolean(
+    result?.data_version && currentVersion && currentVersion !== result.data_version
+  );
 
   const handleRun = () => {
     if (!tsCode.trim()) return;
@@ -80,6 +90,11 @@ export default function Backtest() {
       {/* Results */}
       {result && !mutation.isPending && (
         <>
+          {isStale && (
+            <div className="rounded-lg border border-accent-gold/30 bg-accent-gold/[0.06] px-4 py-2 text-xs text-accent-gold">
+              结果基于 {result.data_date || '历史'} 的数据，行情已更新；点击“开始回测”重新运行。
+            </div>
+          )}
           {/* Summary Cards */}
           <div className="grid grid-cols-6 gap-3">
             {[

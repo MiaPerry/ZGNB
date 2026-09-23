@@ -19,10 +19,14 @@ export default function Watchlist() {
     queryFn: fetchWatchlist,
   });
 
-  const { data: scanResult, isLoading: scanning } = useQuery({
+  const [scanStarted, setScanStarted] = useState(false);
+
+  const { data: scanResult, isFetching: scanUpdating, refetch: refetchScan } = useQuery({
     queryKey: ['watchlist-scan'],
     queryFn: scanWatchlist,
-    enabled: false,
+    // 运行后才启用：同步完成的联动只会重跑已执行过的扫描，不会隐式启动
+    enabled: scanStarted,
+    staleTime: Infinity,
   });
 
   const addMutation = useMutation({
@@ -43,8 +47,13 @@ export default function Watchlist() {
     },
   });
 
+  // enabled:false 的查询不会被 invalidateQueries 触发，必须走查询自身的 refetch
   const handleScan = () => {
-    queryClient.invalidateQueries({ queryKey: ['watchlist-scan'] });
+    if (scanStarted) {
+      void refetchScan();
+    } else {
+      setScanStarted(true);
+    }
   };
 
   if (isLoading) {
@@ -64,8 +73,8 @@ export default function Watchlist() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-bold text-text-primary">自选股管理</h1>
-        <Button onClick={handleScan} disabled={scanning}>
-          {scanning ? '扫描中...' : '信号扫描'}
+        <Button onClick={handleScan} disabled={scanUpdating}>
+          {scanUpdating ? '扫描中...' : '信号扫描'}
         </Button>
       </div>
 
@@ -93,6 +102,9 @@ export default function Watchlist() {
       </Card>
 
       {/* Scan Results */}
+      {scanUpdating && scanResult && (
+        <div className="text-xs text-accent-gold">数据已更新，正在重新扫描…</div>
+      )}
       {scanResult && scanResult.alerts.length > 0 && (
         <Card title={`扫描结果 — ${scanResult.total} 只，${scanResult.alerts.length} 个信号`}>
           <div className="space-y-2">

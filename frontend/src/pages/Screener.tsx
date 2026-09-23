@@ -13,17 +13,21 @@ export default function Screener() {
   const navigate = useNavigate();
   const [selected, setSelected] = useState('B1');
   const [limit, setLimit] = useState(20);
-  const [ran, setRan] = useState(false);
+  // 已提交的筛选参数：只有点击“开始筛选”才更新，切换选项不隐式执行
+  const [submitted, setSubmitted] = useState<{ strategy: string; limit: number } | null>(null);
 
-  const { data: result, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ['screen', selected, limit],
-    queryFn: () => runScreen(selected, limit),
-    enabled: false,
+  const { data: result, isLoading, isFetching, isError, error, refetch } = useQuery({
+    queryKey: ['screen', submitted?.strategy, submitted?.limit],
+    queryFn: () => runScreen(submitted!.strategy, submitted!.limit),
+    // 运行后才启用：同步完成的联动只会重跑已执行过的筛选，不会隐式启动
+    enabled: submitted !== null,
+    // 重任务：仅在手动执行或数据更新联动时重跑，窗口聚焦/重连不触发
+    staleTime: Infinity,
   });
 
-  const handleRun = async () => {
-    setRan(true);
-    await refetch();
+  const ran = submitted !== null;
+  const handleRun = () => {
+    setSubmitted({ strategy: selected, limit });
   };
 
   return (
@@ -62,8 +66,8 @@ export default function Screener() {
               ))}
             </select>
           </div>
-          <Button onClick={handleRun} disabled={isLoading}>
-            {isLoading ? '筛选中...' : '开始筛选'}
+          <Button onClick={handleRun} disabled={isFetching}>
+            {isFetching ? '筛选中...' : '开始筛选'}
           </Button>
         </div>
       </Card>
@@ -95,6 +99,9 @@ export default function Screener() {
 
       {ran && result && !isLoading && (
         <Card title={`筛选结果 — ${result.strategy} (${result.count} 只)`}>
+          {isFetching && (
+            <div className="mb-2 text-xs text-accent-gold">数据已更新，正在重新筛选…</div>
+          )}
           {result.stocks.length === 0 ? (
             <div className="text-center py-8 text-text-muted">无符合条件的股票</div>
           ) : (

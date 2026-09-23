@@ -4,16 +4,12 @@ import axios from 'axios';
 import {
   fetchBatchSyncStatus,
   startBatchSync,
-  type BatchSyncSnapshot,
 } from '../api/sync';
-
-const STATUS_KEY = ['batch-sync-status'] as const;
-
-/** 任务进入终态后需要主动刷新的查询（行情相关） */
-const REFRESH_KEYS = [['stock'], ['kline'], ['watchlist'], ['sync-status']] as const;
-
-/** 仅标记过期、不自动重跑的查询（需用户主动重新扫描） */
-const STALE_ONLY_KEYS = [['screen'], ['watchlist-scan'], ['dashboard-scan']] as const;
+import {
+  STATUS_KEY,
+  refreshAfterSync,
+  shouldHandleTask,
+} from '../lib/syncLinkage';
 
 export function useBatchSync() {
   const queryClient = useQueryClient();
@@ -34,26 +30,19 @@ export function useBatchSync() {
   const startMutation = useMutation({
     mutationFn: startBatchSync,
     onSuccess: (snapshot) => {
+      // 提交响应只是启动快照：写入查询缓存后，始终以轮询缓存为唯一状态来源，
+      // 避免 running 快照长期遮盖轮询到的终态
       queryClient.setQueryData(STATUS_KEY, snapshot);
     },
   });
 
-  const snapshot: BatchSyncSnapshot | undefined =
-    startMutation.data ?? statusQuery.data;
+  const snapshot = statusQuery.data;
 
-  // 任务进入终态（completed / partial_failure / failed）时刷新一次行情相关缓存
+  // 任务进入终态（completed / partial_failure / failed）时联动一次
   useEffect(() => {
-    if (!snapshot?.task_id) return;
-    if (snapshot.status === 'running' || snapshot.status === 'idle') return;
-    if (handledTaskRef.current === snapshot.task_id) return;
-    handledTaskRef.current = snapshot.task_id;
-
-    for (const key of REFRESH_KEYS) {
-      void queryClient.invalidateQueries({ queryKey: key });
-    }
-    for (const key of STALE_ONLY_KEYS) {
-      void queryClient.invalidateQueries({ queryKey: key, refetchType: 'none' });
-    }
+    if (!shouldHandleTask(handledTaskRef.current, snapshot)) return;
+    handledTaskRef.current = snapshot!.task_id;
+    refreshAfterSync(queryClient);
   }, [snapshot, queryClient]);
 
   // 提交失败（如缺少配置）时提取后端错误信息

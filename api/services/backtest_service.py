@@ -52,6 +52,23 @@ def run_portfolio(ts_codes: list[str], days: int = 240, initial_capital: float =
 
 # ── 内部序列化 ──
 
+def _data_meta(ts_code: str) -> dict:
+    """回测结果绑定的数据版本与实际截止日期；组合回测使用全局版本。"""
+    try:
+        from modules.data_freshness import get_data_version
+
+        if "." not in ts_code:
+            return {"data_version": get_data_version(), "data_date": None}
+        from modules.database import get_connection
+
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT MAX(trade_date) FROM daily_kline WHERE ts_code = ?", (ts_code,)
+            ).fetchone()
+        return {"data_version": get_data_version(ts_code), "data_date": row[0] if row else None}
+    except Exception:
+        return {"data_version": "", "data_date": None}
+
 def _shaofu_to_response(ts_code: str, result) -> dict:
     """将少妇战法结果转为 API 响应"""
     trades = []
@@ -89,6 +106,7 @@ def _shaofu_to_response(ts_code: str, result) -> dict:
         },
         "equity_curve": equity_curve,
         "trades": trades,
+        **_data_meta(ts_code),
     }
 
 
@@ -130,6 +148,7 @@ def _portfolio_to_response(ts_code: str, result) -> dict:
         },
         "equity_curve": equity_curve,
         "trades": trades,
+        **_data_meta(ts_code),
     }
 
 

@@ -11,3 +11,4 @@ class CommentaryResponse(BaseModel):
     model_used: str = ""
     cached: bool = False
     error: str = ""
+    data_version: str = ""

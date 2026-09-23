@@ -2,7 +2,7 @@
 Yahoo Finance 美股/港股日线同步适配器（us 分支专用）
 
 - 通过 Yahoo Chart API 拉取日线，经 Clash 代理访问
-- 代码映射：指数（SPX/DJI/IXIC → ^GSPC/^DJI/^IXIC）、港股去前导零
+- 代码映射：指数（SPX/DJI/IXIC → ^GSPC/^DJI/^IXIC）、港股转 4 位数字
 - 日期按响应 meta.gmtoffset 换算为交易所当地日期，不依赖系统时区数据库
 - 写库口径：amount = close * vol，pct_chg 相对前收（序列前一根或库内前收）保留 4 位小数
 """
@@ -39,8 +39,8 @@ def to_yahoo_symbol(ts_code: str) -> str:
     if ts_code.endswith(".US"):
         return ts_code[: -len(".US")]
     if ts_code.endswith(".HK"):
-        # Yahoo 港股代码为无前导零数字 + .HK（02331.HK → 2331.HK）
-        return f"{int(ts_code[: -len('.HK')])}.HK"
+        # Yahoo 港股代码为 4 位数字 + .HK（00700.HK → 0700.HK，02331.HK → 2331.HK）
+        return f"{int(ts_code[: -len('.HK')]):04d}.HK"
     raise ValueError(f"不支持的市场代码: {ts_code}")
 
 

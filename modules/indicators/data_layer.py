@@ -1,4 +1,7 @@
+from copy import deepcopy
 from typing import Optional
+
+from modules.data_freshness import get_data_version
 
 """
 技术指标数据层模块
@@ -65,6 +68,23 @@ except ImportError:
 
 # 指标缓存层（内存 + SQLite）
 _indicator_memory_cache: dict[tuple[str, str], IndicatorResult] = {}
+_indicator_cache_versions: dict[tuple[str, str], str] = {}
+
+# 持久化缓存中保存的基础指标字段：命中缓存时以这些字段为准（与分析窗口无关），
+# 其余扩展分析字段（sell_items、52周高点、MACD语义、砖形动作等）每次实时计算。
+_CACHED_BASE_FIELDS = (
+    "k", "d", "j", "dif", "dea", "macd_hist", "bbi",
+    "ma5", "ma10", "ma20", "ma60",
+    "rsi6", "rsi12", "rsi24", "wr5", "wr10",
+    "boll_mid", "boll_upper", "boll_lower", "boll_width", "boll_position",
+    "vol_ratio", "zg_white", "dg_yellow", "is_gold_cross", "is_dead_cross",
+    "rsl_short", "rsl_long", "is_needle_20",
+    "brick_value", "brick_trend", "brick_count", "brick_trend_up", "is_fanbao",
+    "is_beidou", "is_suoliang", "is_jiayin_zhenyang", "is_jiayang_zhenyin",
+    "is_fangliang_yinxian", "sell_score", "prev_high", "prev_low",
+    "dmi_plus", "dmi_minus", "adx", "net_lg_mf", "net_elg_mf",
+    "last_b1_date", "last_b1_price", "signal",
+)
 
 
 def _load_indicator_cache(ts_code: str, trade_date: str) -> IndicatorResult | None:
@@ -74,10 +94,11 @@ def _load_indicator_cache(ts_code: str, trade_date: str) -> IndicatorResult | No
     Returns:
         IndicatorResult 或 None（缓存未命中）
     """
-    # 1. 先查内存缓存
+    # 1. 先查内存缓存（按持久化数据版本校验，跨进程更新后自动失效）
     mem_key = (ts_code, trade_date)
-    if mem_key in _indicator_memory_cache:
-        return _indicator_memory_cache[mem_key]
+    version = get_data_version(ts_code)
+    if mem_key in _indicator_memory_cache and _indicator_cache_versions.get(mem_key) == version:
+        return deepcopy(_indicator_memory_cache[mem_key])
 
     # 2. 查数据库缓存
     try:
@@ -156,7 +177,8 @@ def _load_indicator_cache(ts_code: str, trade_date: str) -> IndicatorResult | No
 
         # 写入内存缓存
         _indicator_memory_cache[mem_key] = result
-        return result
+        _indicator_cache_versions[mem_key] = version
+        return deepcopy(result)
 
     except Exception:
         return None
@@ -274,7 +296,9 @@ def _save_indicator_cache(result: IndicatorResult, klines: list[DailyData]) -> b
         conn.close()
 
         # 写入内存缓存
-        _indicator_memory_cache[(result.ts_code, result.trade_date)] = result
+        mem_key = (result.ts_code, result.trade_date)
+        _indicator_memory_cache[mem_key] = result
+        _indicator_cache_versions[mem_key] = get_data_version(result.ts_code)
         return True
 
     except Exception:
@@ -284,6 +308,7 @@ def _save_indicator_cache(result: IndicatorResult, klines: list[DailyData]) -> b
 def clear_indicator_memory_cache():
     """清空内存缓存（用于测试或数据更新后）"""
     _indicator_memory_cache.clear()
+    _indicator_cache_versions.clear()
 
 
 def get_kline_data(ts_code: str, days: int = 100) -> list[DailyData]:
@@ -367,10 +392,8 @@ def analyze_stock(ts_code: str, days: int = 100) -> IndicatorResult:
     today = klines[-1]
     yesterday = klines[-2] if len(klines) > 1 else None
 
-    # ===== 缓存查询 =====
+    # ===== 缓存查询（仅复用基础指标，不回写；扩展分析字段实时计算） =====
     cached = _load_indicator_cache(ts_code, today.trade_date)
-    if cached:
-        return cached
 
     result = IndicatorResult(ts_code=ts_code, trade_date=today.trade_date)
 
@@ -416,10 +439,10 @@ def analyze_stock(ts_code: str, days: int = 100) -> IndicatorResult:
         result.ma20 = calculate_ma(closes, 20)
     if len(closes) >= 60:
         result.ma60 = calculate_ma(closes, 60)
-    # 52周（约240交易日）最高价
-    if len(klines) >= 240:
-        highs = [k.high for k in klines[-240:]]
-        result.high_52w = max(highs)
+    # 52周（约240交易日）最高价：窗口不足时单独补取历史，不改变指标计算窗口
+    highs_source = klines[-240:] if len(klines) >= 240 else get_kline_data(ts_code, 240)
+    if highs_source:
+        result.high_52w = max(k.high for k in highs_source)
         result.high_52w_dist = (result.high_52w - today.close) / today.close * 100
 
     # 计算 RSI
@@ -600,6 +623,12 @@ def analyze_stock(ts_code: str, days: int = 100) -> IndicatorResult:
 
     # 交易信号
     result.signal = detect_trade_signal(klines)
+
+    # 命中持久化缓存时以缓存的基础指标为准（与窗口无关，保证跨进程/跨窗口一致），
+    # 扩展分析字段使用本次计算结果。
+    if cached is not None:
+        for field in _CACHED_BASE_FIELDS:
+            setattr(result, field, getattr(cached, field))
 
     return result
 

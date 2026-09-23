@@ -15,10 +15,14 @@ export default function Dashboard() {
     queryFn: fetchWatchlist,
   });
 
-  const { data: scanResult, isLoading: scanning, refetch: doScan } = useQuery({
+  const [scanStarted, setScanStarted] = useState(false);
+
+  const { data: scanResult, isLoading: scanning, isFetching: scanUpdating, refetch: doScan } = useQuery({
     queryKey: ['dashboard-scan'],
     queryFn: scanWatchlist,
-    enabled: false,
+    // 运行后才启用：同步完成的联动只会重跑已执行过的扫描，不会隐式启动
+    enabled: scanStarted,
+    staleTime: Infinity,
   });
 
   const handleSearch = (e: React.FormEvent) => {
@@ -89,10 +93,14 @@ export default function Dashboard() {
       {/* Watchlist Signals */}
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-bold text-text-primary">自选股信号</h2>
-        <Button size="sm" onClick={() => doScan()} disabled={scanning}>
-          {scanning ? '扫描中...' : '扫描信号'}
+        <Button size="sm" onClick={() => (scanStarted ? doScan() : setScanStarted(true))} disabled={scanUpdating}>
+          {scanUpdating ? '扫描中...' : '扫描信号'}
         </Button>
       </div>
+
+      {scanUpdating && !scanning && scanResult && (
+        <div className="text-xs text-accent-gold">数据已更新，正在重新扫描…</div>
+      )}
 
       {scanResult && scanResult.alerts.length > 0 && (
         <div className="space-y-2">

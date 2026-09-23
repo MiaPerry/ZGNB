@@ -294,8 +294,9 @@ def _build_user_prompt(analysis: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _get_cache_key(analysis: dict[str, Any]) -> str:
-    return f"{analysis.get('ts_code', '')}:{analysis.get('trade_date', '')}"
+def _get_cache_key(analysis: dict[str, Any], data_version: str) -> str:
+    # 缓存键绑定标的数据版本：同日补齐指标后手动生成不得命中旧输入的点评
+    return f"{analysis.get('ts_code', '')}:{analysis.get('trade_date', '')}:{data_version}"
 
 
 def generate_commentary(analysis: dict[str, Any]) -> dict[str, Any]:
@@ -303,21 +304,28 @@ def generate_commentary(analysis: dict[str, Any]) -> dict[str, Any]:
     生成 Z哥点评
 
     Returns:
-        { ts_code, trade_date, commentary_text, generated_at, model_used, cached }
+        { ts_code, trade_date, commentary_text, generated_at, model_used, cached, data_version }
     """
-    cache_key = _get_cache_key(analysis)
+    ts_code = analysis.get("ts_code", "")
+    try:
+        from modules.data_freshness import get_data_version
+        data_version = get_data_version(ts_code)
+    except Exception:
+        data_version = ""
+    cache_key = _get_cache_key(analysis, data_version)
 
     # 检查缓存
     if cache_key in _cache:
         text, ts = _cache[cache_key]
         if time.time() - ts < _CACHE_TTL:
             return {
-                "ts_code": analysis.get("ts_code", ""),
+                "ts_code": ts_code,
                 "trade_date": analysis.get("trade_date", ""),
                 "commentary_text": text,
                 "generated_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)),
                 "model_used": os.getenv("LLM_MODEL", "MiniMax-M3"),
                 "cached": True,
+                "data_version": data_version,
             }
 
     # 构建提示词
@@ -330,7 +338,6 @@ def generate_commentary(analysis: dict[str, Any]) -> dict[str, Any]:
         user_prompt += f"\n\n【参考知识库】\n{knowledge}"
 
     # 调用 LLM
-    ts_code = analysis.get("ts_code", "")
     model_name = os.getenv("LLM_MODEL", "MiniMax-M3")
     start_ts = time.perf_counter()
     try:
@@ -370,13 +377,14 @@ def generate_commentary(analysis: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             pass
         return {
-            "ts_code": analysis.get("ts_code", ""),
+            "ts_code": ts_code,
             "trade_date": analysis.get("trade_date", ""),
             "commentary_text": f"[LLM 未配置] {e}",
             "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "model_used": "",
             "cached": False,
             "error": "llm_not_configured",
+            "data_version": data_version,
         }
     except Exception as e:
         elapsed_ms = (time.perf_counter() - start_ts) * 1000.0
@@ -394,13 +402,14 @@ def generate_commentary(analysis: dict[str, Any]) -> dict[str, Any]:
             pass
         logger.error("LLM 生成失败: %s", e, exc_info=True)
         return {
-            "ts_code": analysis.get("ts_code", ""),
+            "ts_code": ts_code,
             "trade_date": analysis.get("trade_date", ""),
             "commentary_text": f"[生成失败] {e}",
             "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "model_used": os.getenv("LLM_MODEL", ""),
             "cached": False,
             "error": "llm_failed",
+            "data_version": data_version,
         }
 
     # 写入缓存
@@ -411,10 +420,11 @@ def generate_commentary(analysis: dict[str, Any]) -> dict[str, Any]:
     _cache[cache_key] = (text, time.time())
 
     return {
-        "ts_code": analysis.get("ts_code", ""),
+        "ts_code": ts_code,
         "trade_date": analysis.get("trade_date", ""),
         "commentary_text": text,
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "model_used": os.getenv("LLM_MODEL", "MiniMax-M3"),
         "cached": False,
+        "data_version": data_version,
     }

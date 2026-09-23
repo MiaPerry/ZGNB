@@ -205,43 +205,47 @@ def get_kline_chart_data(ts_code: str, days: int = 120) -> dict[str, Any]:
     n = len(closes)
     overlays: dict[str, list[float | None]] = {}
 
+    # MA / BBI / 布林带：用全量历史计算后切片，保证短窗口左边缘也有正确值
+    all_closes = [k.close for k in all_klines]
+    offset = len(all_closes) - n
+
     # MA
     for period, key in [(5, "ma5"), (10, "ma10"), (20, "ma20"), (60, "ma60")]:
-        ma_vals: list[float | None] = [None] * n
-        for i in range(period - 1, n):
-            ma_vals[i] = round(sum(closes[i - period + 1:i + 1]) / period, 2)
-        overlays[key] = ma_vals
+        full: list[float | None] = [None] * len(all_closes)
+        for i in range(period - 1, len(all_closes)):
+            full[i] = round(sum(all_closes[i - period + 1:i + 1]) / period, 2)
+        overlays[key] = full[offset:]
 
     # BBI
-    bbi_vals: list[float | None] = [None] * n
-    for i in range(23, n):  # BBI 需要 MA3/MA6/MA12/MA24
-        ma3 = sum(closes[i - 2:i + 1]) / 3
-        ma6 = sum(closes[i - 5:i + 1]) / 6
-        ma12 = sum(closes[i - 11:i + 1]) / 12
-        ma24 = sum(closes[i - 23:i + 1]) / 24
-        bbi_vals[i] = round((ma3 + ma6 + ma12 + ma24) / 4, 2)
-    overlays["bbi"] = bbi_vals
+    bbi_full: list[float | None] = [None] * len(all_closes)
+    for i in range(23, len(all_closes)):  # BBI 需要 MA3/MA6/MA12/MA24
+        ma3 = sum(all_closes[i - 2:i + 1]) / 3
+        ma6 = sum(all_closes[i - 5:i + 1]) / 6
+        ma12 = sum(all_closes[i - 11:i + 1]) / 12
+        ma24 = sum(all_closes[i - 23:i + 1]) / 24
+        bbi_full[i] = round((ma3 + ma6 + ma12 + ma24) / 4, 2)
+    overlays["bbi"] = bbi_full[offset:]
 
     # 布林带
-    boll_mid: list[float | None] = [None] * n
-    boll_upper: list[float | None] = [None] * n
-    boll_lower: list[float | None] = [None] * n
-    for i in range(19, n):
-        window = closes[i - 19:i + 1]
+    boll_mid_full: list[float | None] = [None] * len(all_closes)
+    boll_upper_full: list[float | None] = [None] * len(all_closes)
+    boll_lower_full: list[float | None] = [None] * len(all_closes)
+    for i in range(19, len(all_closes)):
+        window = all_closes[i - 19:i + 1]
         mid = sum(window) / 20
         std = (sum((x - mid) ** 2 for x in window) / 20) ** 0.5
-        boll_mid[i] = round(mid, 2)
-        boll_upper[i] = round(mid + 2 * std, 2)
-        boll_lower[i] = round(mid - 2 * std, 2)
-    overlays["boll_mid"] = boll_mid
-    overlays["boll_upper"] = boll_upper
-    overlays["boll_lower"] = boll_lower
+        boll_mid_full[i] = round(mid, 2)
+        boll_upper_full[i] = round(mid + 2 * std, 2)
+        boll_lower_full[i] = round(mid - 2 * std, 2)
+    overlays["boll_mid"] = boll_mid_full[offset:]
+    overlays["boll_upper"] = boll_upper_full[offset:]
+    overlays["boll_lower"] = boll_lower_full[offset:]
 
     # 白线 / 黄线（双线战法）
     try:
         white_line = []
         yellow_line = []
-        for i in range(len(all_klines) - days, len(all_klines)):
+        for i in range(offset, len(all_klines)):
             try:
                 white_val = calculate_zg_white(all_klines, i)
                 yellow_val = calculate_dg_yellow(all_klines, i)
@@ -254,8 +258,8 @@ def get_kline_chart_data(ts_code: str, days: int = 120) -> dict[str, Any]:
         overlays["yellow_line"] = yellow_line
     except Exception:
         logger.warning("白线/黄线计算失败: %s", ts_code, exc_info=True)
-        overlays["white_line"] = [None] * days
-        overlays["yellow_line"] = [None] * days
+        overlays["white_line"] = [None] * n
+        overlays["yellow_line"] = [None] * n
 
     # ── KDJ 时间序列 ── 用全量历史数据计算
     kdj_k: list[float | None] = [None] * n
@@ -289,13 +293,13 @@ def get_kline_chart_data(ts_code: str, days: int = 120) -> dict[str, Any]:
         from modules.indicators.core import precompute_macd_sequence
         dif_full, dea_full, macd_full = precompute_macd_sequence(all_klines)
         for i in range(n):
-            idx = len(all_klines) - days + i
+            idx = offset + i
             if dif_full[idx] is not None:
                 macd_dif[i] = round(dif_full[idx], 4)
             if dea_full[idx] is not None:
                 macd_dea[i] = round(dea_full[idx], 4)
             if macd_full[idx] is not None:
-                macd_hist[i] = round(macd_full[idx] * 2, 4)
+                macd_hist[i] = round(macd_full[idx], 4)
     except Exception:
         pass
 
@@ -305,7 +309,7 @@ def get_kline_chart_data(ts_code: str, days: int = 120) -> dict[str, Any]:
     try:
         from modules.indicators.price_patterns import calculate_brick_value
         for i in range(n):
-            idx = len(all_klines) - days + i
+            idx = offset + i
             sub_klines = all_klines[:idx + 1]
             try:
                 val = calculate_brick_value(sub_klines)
