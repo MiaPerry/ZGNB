@@ -20,6 +20,7 @@ from pathlib import Path
 
 from modules.database import get_connection, get_db_path
 from modules.data_freshness import data_update_batch, get_data_status
+from modules.market_sync_lock import MarketSyncLease
 
 logger = logging.getLogger(__name__)
 
@@ -211,14 +212,21 @@ class USStockSyncService:
         with self._lock:
             if self._snapshot.status == "running":
                 return self._copy_snapshot()
+            task_id = uuid.uuid4().hex[:12]
+            lease = MarketSyncLease.acquire(task_id)
             self._snapshot = SyncTaskSnapshot(
-                task_id=uuid.uuid4().hex[:12],
+                task_id=task_id,
                 status="running",
                 phase="backup",
                 message="任务已启动",
                 started_at=datetime.now().isoformat(timespec="seconds"),
             )
-            self._future = self._executor.submit(self._run)
+            try:
+                self._future = self._executor.submit(self._run_guarded, lease)
+            except BaseException:
+                lease.__exit__()
+                self._snapshot.status = "failed"
+                raise
             return self._copy_snapshot()
 
     def get_status(self) -> SyncTaskSnapshot:
@@ -254,6 +262,10 @@ class USStockSyncService:
         if self._syncer is None:
             self._syncer = YahooSyncer()
         return self._syncer
+
+    def _run_guarded(self, lease):
+        with lease:
+            self._run()
 
     def _run(self):
         try:

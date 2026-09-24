@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
@@ -8,6 +9,8 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import ApiErrorState from '../components/ui/ApiErrorState';
+import StockImportDialog from '../components/stock/StockImportDialog';
+import { useStockImport } from '../hooks/useStockImport';
 import { formatNumber, formatPct, formatVolume } from '../lib/formatters';
 import { parseStockListQuery, updateStockListQuery, stockChangeColor } from '../lib/stockListQuery';
 
@@ -24,6 +27,8 @@ function errorMessage(error: unknown): string {
 }
 
 export default function StockList() {
+  const [importOpen, setImportOpen] = useState(false);
+  const importTask = useStockImport();
   const [search, setSearch] = useSearchParams();
   const params = parseStockListQuery(search);
   const queryClient = useQueryClient();
@@ -73,10 +78,17 @@ export default function StockList() {
             仅展示系统已收录标的，不代表全市场；价格为最近日线收盘价，非实时行情，请以各行交易日期为准。
           </p>
         </div>
-        <Button variant="secondary" onClick={() => void refetch()} disabled={isFetching} className={disabledClass}>
-          {isFetching ? '刷新中…' : '刷新列表'}
-        </Button>
+        <div className="flex gap-2">
+          <Button onClick={() => { setImportOpen(true); importTask.refresh(); }}>
+            {importTask.isRunning ? '查看添加进度' : '添加股票'}
+          </Button>
+          <Button variant="secondary" onClick={() => void refetch()} disabled={isFetching} className={disabledClass}>
+            {isFetching ? '刷新中…' : '刷新列表'}
+          </Button>
+        </div>
       </div>
+
+      <StockImportDialog open={importOpen} onClose={() => setImportOpen(false)} task={importTask} />
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Card className="hover:translate-y-0">
@@ -176,13 +188,14 @@ export default function StockList() {
                       <td className="whitespace-nowrap px-3 py-3 text-xs text-text-secondary">
                         {dateLabel(stock.trade_date)}
                         {stock.data_status === 'missing' && <div className="mt-1 text-accent-gold">暂无可用行情</div>}
+                        {stock.data_status === 'available' && !stock.indicators_ready && <div className="mt-1 text-accent-gold">指标待补齐</div>}
                       </td>
                       <td className="whitespace-nowrap px-3 py-3">
                         <div className="flex items-center gap-3">
-                          {stock.data_status === 'available' ? (
+                          {stock.data_status === 'available' && stock.indicators_ready ? (
                             <Link to={`/stock/${stock.ts_code}`} state={{ stockListSearch: search.toString() }}
                               className="text-xs text-accent-blue hover:underline" aria-label={`分析 ${stock.ts_code}`}>分析</Link>
-                          ) : <span className="text-xs text-text-muted" title="缺少可用行情，暂不能分析">分析不可用</span>}
+                          ) : <span className="text-xs text-text-muted" title="行情或指标未就绪，暂不能分析">分析不可用</span>}
                           <button disabled={stock.is_watchlisted || addMutation.isPending}
                             onClick={() => addMutation.mutate(stock.ts_code)}
                             aria-label={`${stock.is_watchlisted ? '已自选' : '加入自选'} ${stock.ts_code}`}

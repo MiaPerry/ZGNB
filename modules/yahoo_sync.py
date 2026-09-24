@@ -136,6 +136,11 @@ def sync_us_daily(ts_code: str, start_date: str, end_date: str, *, session=None,
     """
     with closing(_default_session()) if session is None else nullcontext(session) as active_session:
         payload = fetch_chart(to_yahoo_symbol(ts_code), start_date, end_date, active_session)
+    return _save_chart_payload(ts_code, start_date, end_date, payload, incremental=incremental)
+
+
+def _save_chart_payload(ts_code, start_date, end_date, payload, *, incremental, conn=None):
+    """复用相同涨跌幅及写库口径；收录新股时由调用方统一事务。"""
     all_bars = sorted(parse_chart_bars(payload, ts_code), key=lambda b: b["trade_date"])
     bars = [b for b in all_bars if start_date <= b["trade_date"] <= end_date]
     if not bars:
@@ -145,7 +150,7 @@ def sync_us_daily(ts_code: str, start_date: str, end_date: str, *, session=None,
     previous = [b for b in all_bars if b["trade_date"] < start_date]
     prev_close = previous[-1]["close"] if previous else None
     written = 0
-    with get_connection() as conn:
+    with get_connection() if conn is None else nullcontext(conn) as conn:
         cursor = conn.cursor()
         for bar in bars:
             if prev_close is not None:
@@ -192,3 +197,45 @@ def sync_us_daily(ts_code: str, start_date: str, end_date: str, *, session=None,
 
     logger.info("Yahoo 日线同步完成: %s, %d 条 (%s-%s)", ts_code, written, start_date, end_date)
     return written
+
+
+def import_us_stock(ts_code, start_date, end_date, *, session=None):
+    """校验普通美股后原子收录；不会改名、覆盖行情或增加自选。"""
+    import math
+
+    symbol = to_yahoo_symbol(ts_code)
+    if not ts_code.endswith('.US') or symbol.startswith('^'):
+        raise ValueError('目前仅支持普通美股')
+    with closing(_default_session()) if session is None else nullcontext(session) as active_session:
+        payload = fetch_chart(symbol, start_date, end_date, active_session)
+    all_bars = parse_chart_bars(payload, ts_code)
+    bars = sorted((b for b in all_bars if start_date <= b['trade_date'] <= end_date), key=lambda b: b['trade_date'])
+    if not bars:
+        raise ValueError('数据源未返回该区间有效日线，请核对代码或稍后重试')
+    meta = payload['chart']['result'][0].get('meta') or {}
+    if (meta.get('symbol', '').upper() != symbol or meta.get('instrumentType') != 'EQUITY'
+            or meta.get('currency') != 'USD' or meta.get('exchangeTimezoneName') != 'America/New_York'):
+        raise ValueError('数据源标的信息不匹配或不属于支持的普通美股')
+    if len({b['trade_date'] for b in bars}) != len(bars):
+        raise ValueError('数据源包含重复交易日')
+    for bar in all_bars:
+        prices = [bar[k] for k in ('open', 'high', 'low', 'close')]
+        if (any(not isinstance(v, (int, float)) or not math.isfinite(v) or v <= 0 for v in prices)
+                or not isinstance(bar['vol'], (int, float)) or not math.isfinite(bar['vol']) or bar['vol'] < 0
+                or not bar['low'] <= min(bar['open'], bar['close']) <= max(bar['open'], bar['close']) <= bar['high']):
+            raise ValueError('数据源 OHLC 或成交量异常，未写入')
+    name = str(meta.get('longName') or meta.get('shortName') or symbol)[:200]
+    with get_connection() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        exists = conn.execute(
+            'SELECT 1 FROM stock_basic WHERE ts_code=? UNION ALL SELECT 1 FROM daily_kline WHERE ts_code=? LIMIT 1',
+            (ts_code, ts_code),
+        ).fetchone()
+        if exists:
+            raise ValueError('股票已经存在，请使用日常更新；本次未覆盖')
+        conn.execute(
+            "INSERT INTO stock_basic(ts_code,name,area,industry,market,list_date,is_hs) VALUES (?,?,'美国','','美股',NULL,'N')",
+            (ts_code, name),
+        )
+        written = _save_chart_payload(ts_code, start_date, end_date, payload, incremental=True, conn=conn)
+    return {'name': name, 'rows': written, 'first_date': bars[0]['trade_date'], 'last_date': bars[-1]['trade_date']}

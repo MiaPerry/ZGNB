@@ -1,8 +1,23 @@
 import api from './client';
-import type { StockAnalysis, KlineChart, CommentaryResponse, StockListParams, StockListResponse } from './types';
+import type { StockAnalysis, KlineChart, CommentaryResponse, StockListParams, StockListResponse, StockImportSnapshot } from './types';
 
 export async function fetchStockList(params: StockListParams, signal?: AbortSignal): Promise<StockListResponse> {
   const { data } = await api.get<StockListResponse>('/stock/list', { params, signal });
+  return data;
+}
+
+export async function startStockImport(codes: string): Promise<StockImportSnapshot> {
+  const { data } = await api.post<StockImportSnapshot>('/stock/imports', { codes });
+  return data;
+}
+
+export async function fetchStockImport(taskId?: string): Promise<StockImportSnapshot> {
+  const { data } = await api.get<StockImportSnapshot>(`/stock/imports/${taskId ?? 'latest'}`);
+  return data;
+}
+
+export async function retryStockImport(taskId: string): Promise<StockImportSnapshot> {
+  const { data } = await api.post<StockImportSnapshot>(`/stock/imports/${taskId}/retry`);
   return data;
 }
 

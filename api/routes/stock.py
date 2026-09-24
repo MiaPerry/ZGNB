@@ -11,8 +11,12 @@ from api.models.stock import (
     StockListResponse,
     StockMarket,
     StockSort,
+    StockImportRequest,
+    StockImportSnapshot,
 )
 from api.services import stock_service
+from api.services.stock_import_service import get_stock_import_service
+from modules.market_sync_lock import SyncBusyError
 
 router = APIRouter()
 
@@ -33,6 +37,38 @@ def list_stocks(
         market=market, q=q, industry=industry, data_status=data_status,
         sort_by=sort_by, order=order, page=page, page_size=page_size,
     )
+
+
+def _import_call(action):
+    try:
+        return action()
+    except SyncBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="股票添加任务不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/imports", response_model=StockImportSnapshot, status_code=202)
+def import_stocks(body: StockImportRequest):
+    """提交单只/批量普通美股收录任务，不在请求线程下载行情。"""
+    return _import_call(lambda: get_stock_import_service().submit(body.codes))
+
+
+@router.get("/imports/latest", response_model=StockImportSnapshot)
+def latest_stock_import():
+    return _import_call(lambda: get_stock_import_service().get_status())
+
+
+@router.get("/imports/{task_id}", response_model=StockImportSnapshot)
+def stock_import_status(task_id: str):
+    return _import_call(lambda: get_stock_import_service().get_status(task_id))
+
+
+@router.post("/imports/{task_id}/retry", response_model=StockImportSnapshot, status_code=202)
+def retry_stock_import(task_id: str):
+    return _import_call(lambda: get_stock_import_service().retry(task_id))
 
 
 @router.get("/analyze/{ts_code}", response_model=StockAnalysisResponse)

@@ -33,6 +33,7 @@ export interface StockListItem {
   trade_date: string | null;
   data_status: 'available' | 'missing';
   is_watchlisted: boolean;
+  indicators_ready: boolean;
 }
 
 export interface StockListResponse {
@@ -44,6 +45,35 @@ export interface StockListResponse {
   latest_trade_date: string | null;
   industries: string[];
   markets: { market: StockMarket; count: number }[];
+}
+
+// ── 股票收录任务 ──
+export interface StockImportItem {
+  ts_code: string;
+  name: string;
+  status: 'pending' | 'downloading' | 'indicators' | 'completed' | 'skipped' | 'failed' | 'interrupted';
+  message: string;
+  rows: number;
+  indicator_rows: number;
+  first_date: string | null;
+  last_date: string | null;
+}
+
+export interface StockImportSnapshot {
+  task_id: string | null;
+  sequence: number;
+  revision: number;
+  status: 'idle' | 'running' | 'completed' | 'partial_failure' | 'failed' | 'interrupted';
+  phase: string;
+  items: StockImportItem[];
+  start_date: string | null;
+  end_date: string | null;
+  total: number;
+  processed: number;
+  success: number;
+  skipped: number;
+  failed: number;
+  message: string;
 }
 
 // ── 股票分析 ──

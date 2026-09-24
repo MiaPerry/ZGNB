@@ -1,7 +1,7 @@
 """股票分析相关 Pydantic 模型"""
 
 from typing import Any, Literal
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ── 股票库 ──
@@ -22,6 +22,7 @@ class StockListItem(BaseModel):
     trade_date: str | None = None
     data_status: StockDataStatus
     is_watchlisted: bool
+    indicators_ready: bool = False
 
 
 class StockMarketCount(BaseModel):
@@ -38,6 +39,43 @@ class StockListResponse(BaseModel):
     latest_trade_date: str | None
     industries: list[str]
     markets: list[StockMarketCount]
+
+
+# ── 新股票收录 ──
+
+class StockImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    codes: str = Field(min_length=1, max_length=5000)
+
+
+class StockImportItem(BaseModel):
+    ts_code: str
+    status: Literal["pending", "downloading", "indicators", "completed", "skipped", "failed", "interrupted"]
+    name: str = ""
+    message: str = ""
+    rows: int = 0
+    indicator_rows: int = 0
+    first_date: str | None = None
+    last_date: str | None = None
+
+
+class StockImportSnapshot(BaseModel):
+    task_id: str | None = None
+    sequence: int = 0
+    revision: int = 0
+    status: Literal["idle", "running", "completed", "partial_failure", "failed", "interrupted"]
+    phase: str = "idle"
+    items: list[StockImportItem] = Field(default_factory=list)
+    start_date: str | None = None
+    end_date: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    total: int = 0
+    processed: int = 0
+    success: int = 0
+    skipped: int = 0
+    failed: int = 0
+    message: str = ""
 
 
 # ── 指标详情 ──

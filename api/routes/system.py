@@ -9,6 +9,7 @@ from api.models.common import StatusResponse
 from api.models.sync import BatchSyncSnapshot
 from api.services.sync_service import SyncConfigError, get_a_share_sync_service
 from api.config import settings
+from modules.market_sync_lock import MarketSyncLease, SyncBusyError
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,8 @@ def start_batch_sync():
         snapshot = get_a_share_sync_service().submit()
     except SyncConfigError as e:
         raise HTTPException(status_code=503, detail=str(e))
+    except SyncBusyError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     return snapshot.to_dict()
 
 
@@ -86,10 +89,13 @@ def sync_stock(ts_code: str, days: int = 730, indicators: bool = True):
     try:
         from modules.data_sync import DataSyncer
 
-        syncer = DataSyncer()
-        syncer.sync_daily_kline(ts_code, days=days)
-        if indicators:
-            syncer.compute_indicators(ts_code, days=days)
+        with MarketSyncLease.acquire("single-stock-sync"):
+            syncer = DataSyncer()
+            syncer.sync_daily_kline(ts_code, days=days)
+            if indicators:
+                syncer.compute_indicators(ts_code, days=days)
         return StatusResponse(status="ok", message=f"{ts_code} 同步完成")
+    except SyncBusyError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"同步失败: {e}")

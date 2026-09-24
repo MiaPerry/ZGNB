@@ -39,7 +39,12 @@ def list_stocks(
                    CASE WHEN k.close > 0 THEN k.vol END AS vol,
                    k.trade_date,
                    CASE WHEN k.close > 0 THEN 'available' ELSE 'missing' END AS data_status,
-                   EXISTS(SELECT 1 FROM watchlist w WHERE w.ts_code = s.ts_code) AS is_watchlisted
+                   EXISTS(SELECT 1 FROM watchlist w WHERE w.ts_code = s.ts_code) AS is_watchlisted,
+                   CASE WHEN k.close > 0 AND NOT EXISTS (
+                       SELECT 1 FROM daily_kline d LEFT JOIN indicator_cache i
+                       ON i.ts_code=d.ts_code AND i.trade_date=d.trade_date
+                       WHERE d.ts_code=s.ts_code AND i.ts_code IS NULL
+                   ) THEN 1 ELSE 0 END AS indicators_ready
             FROM stock_basic s
             LEFT JOIN daily_kline k ON k.ts_code = s.ts_code
                 AND k.trade_date = (SELECT MAX(d.trade_date) FROM daily_kline d WHERE d.ts_code = s.ts_code)
