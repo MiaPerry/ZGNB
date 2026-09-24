@@ -3,6 +3,12 @@ indicators.py 核心技术指标测试
 覆盖所有独立计算函数
 """
 
+import math
+import random
+
+import pandas as pd
+import pytest
+
 from modules.indicators import (
     DailyData,
     IndicatorResult,
@@ -347,7 +353,64 @@ class TestCalculateVolRatio:
 # ========== Z哥双线战法 ==========
 
 
+def _double_ema_reference(closes):
+    """双EMA的闭式权重参考，不调用生产EMA，也不复制递推实现。"""
+    alpha = 2 / 11
+    decay = 1 - alpha
+    last = len(closes) - 1
+    initial = closes[0] * decay ** last * (1 + last * alpha)
+    return initial + alpha ** 2 * math.fsum(
+        (last - i + 1) * decay ** (last - i) * closes[i] for i in range(1, len(closes))
+    )
+
+
 class TestDoubleLine:
+    @pytest.mark.parametrize("length", range(10))
+    def test_white_preserves_unavailable_history(self, length):
+        assert calculate_zg_white([make_kline(price=100) for _ in range(length)]) == 0
+
+    @pytest.mark.parametrize("length, expected", [(10, 3.69), (18, 9.76), (19, 10.64), (20, 11.54), (120, 111.0)])
+    def test_white_known_double_ema_values(self, length, expected):
+        """锁定旧实现出错的10~18根分支和第19根后的截断EMA口径。"""
+        bars = [make_kline(price=float(i)) for i in range(1, length + 1)]
+        assert calculate_zg_white(bars) == expected
+
+    @pytest.mark.parametrize("scenario", ["constant", "rising", "falling", "step", "impulse", "sine", "random", "small"])
+    def test_white_matches_independent_reference_at_every_prefix(self, scenario):
+        """比较未舍入的独立参考，误差只能来自最终两位显示精度。"""
+        rng = random.Random(42)
+        samples = {
+            "constant": [7.0] * 200,
+            "rising": [float(i) for i in range(1, 201)],
+            "falling": [float(i) for i in range(200, 0, -1)],
+            "step": [10.0] * 20 + [20.0] * 180,
+            "impulse": [10.0] * 20 + [20.0] + [10.0] * 179,
+            "sine": [100 + 9 * math.sin(i / 4) for i in range(200)],
+            "random": [rng.uniform(1, 200) for _ in range(200)],
+            "small": [i / 100000 for i in range(1, 201)],
+        }
+        closes = samples[scenario]
+        bars = [make_kline(price=close) for close in closes]
+        for length in range(10, len(bars) + 1):
+            actual = calculate_zg_white(bars[:length])
+            expected = _double_ema_reference(closes[:length])
+            assert actual == pytest.approx(expected, abs=0.005000001, rel=0), (scenario, length)
+
+    def test_white_history_does_not_change_after_future_append(self):
+        bars = [make_kline(price=100 + 9 * math.sin(i / 4)) for i in range(120)]
+        before = [calculate_zg_white(bars[:i]) for i in range(10, len(bars) + 1)]
+        bars.append(make_kline(price=1000000))
+        after = [calculate_zg_white(bars[:i]) for i in range(10, len(bars))]
+        assert after == before
+
+    def test_yellow_matches_independent_rolling_reference(self):
+        closes = pd.Series([100 + 9 * math.sin(i / 4) for i in range(200)])
+        expected = sum(closes.rolling(period).mean() for period in (14, 28, 57, 114)) / 4
+        bars = [make_kline(price=float(close)) for close in closes]
+        assert calculate_dg_yellow(bars[:113]) == 0
+        for length in range(114, len(bars) + 1):
+            assert calculate_dg_yellow(bars[:length]) == pytest.approx(expected.iloc[length - 1], abs=0.005000001, rel=0)
+
     def test_zg_white(self):
         klines = make_klines(n=120, base_price=100.0, daily_pct=0.5)
         white = calculate_zg_white(klines)

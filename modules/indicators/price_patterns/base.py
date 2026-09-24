@@ -1,6 +1,15 @@
 from ..core import DailyData, calculate_ma, calculate_ema
 
 
+def _ema_series(prices: list[float], period: int) -> list[float]:
+    """EMA 递推完整序列（通达信口径：初值=首个值，k=2/(N+1)）"""
+    k = 2 / (period + 1)
+    out = [prices[0]]
+    for p in prices[1:]:
+        out.append(p * k + out[-1] * (1 - k))
+    return out
+
+
 def calculate_zg_white(klines: list[DailyData]) -> float:
     """
     计算 Z哥白线 = EMA(EMA(C,10),10)
@@ -10,13 +19,9 @@ def calculate_zg_white(klines: list[DailyData]) -> float:
     if len(klines) < 10:
         return 0
     closes = [k.close for k in klines]
-    ema1 = calculate_ema(closes, 10)
-    # 再次平滑：用前10天数据计算第二次EMA
-    if len(klines) < 19:
-        return ema1
-    recent_10 = closes[-10:]
-    ema2 = calculate_ema(recent_10, 10)
-    return round(ema2, 2)
+    ema1 = _ema_series(closes, 10)
+    ema2 = _ema_series(ema1, 10)
+    return round(ema2[-1], 2)
 
 
 def calculate_dg_yellow(klines: list[DailyData]) -> float:

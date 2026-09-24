@@ -312,9 +312,12 @@ def get_kline_chart_data(ts_code: str, days: int = 120) -> dict[str, Any]:
         for i in range(n):
             idx = offset + i
             sub_klines = all_klines[:idx + 1]
+            if len(sub_klines) < 12:
+                # 预热占位0不是有效砖值；成熟样本的真实0仍须保留。
+                continue
             try:
                 val = calculate_brick_value(sub_klines)
-                brick_values[i] = round(val, 2) if val else None
+                brick_values[i] = round(val, 2)
                 # 判断红绿：大于等于前一天为红(1)，小于为绿(-1)
                 if i > 0 and brick_values[i] is not None and brick_values[i - 1] is not None:
                     brick_colors[i] = 1 if brick_values[i] >= brick_values[i - 1] else -1
