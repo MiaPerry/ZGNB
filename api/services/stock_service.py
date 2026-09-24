@@ -247,8 +247,9 @@ def get_kline_chart_data(ts_code: str, days: int = 120) -> dict[str, Any]:
         yellow_line = []
         for i in range(offset, len(all_klines)):
             try:
-                white_val = calculate_zg_white(all_klines, i)
-                yellow_val = calculate_dg_yellow(all_klines, i)
+                sub_klines = all_klines[: i + 1]
+                white_val = calculate_zg_white(sub_klines)
+                yellow_val = calculate_dg_yellow(sub_klines)
                 white_line.append(round(white_val, 2) if white_val else None)
                 yellow_line.append(round(yellow_val, 2) if yellow_val else None)
             except Exception:

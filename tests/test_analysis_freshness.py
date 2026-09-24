@@ -30,6 +30,8 @@ def test_analysis_and_chart_share_warmed_basics_without_writing(db_conn, monkeyp
         assert chart['overlays']['ma60'][-1] == pytest.approx(result.ma60, abs=0.01)
         assert result.j == cached.j
         assert len(chart['overlays']['white_line']) == len(chart['dates'])
+        assert chart['overlays']['white_line'][-1] is not None and chart['overlays']['white_line'][-1] > 0
+        assert chart['overlays']['yellow_line'][-1] is not None and chart['overlays']['yellow_line'][-1] > 0
     assert [tuple(r) for r in db_conn.execute('SELECT * FROM indicator_cache')] == before
 
 
