@@ -121,7 +121,7 @@ export default function Header() {
         {!isDashboard && (
           <kbd className="hidden md:inline rounded border border-border/60 bg-bg-primary px-1.5 py-0.5 text-[10px] text-text-muted font-mono">⌘K</kbd>
         )}
-        <span>Z哥量化工具</span>
+        <span>Quantitative</span>
       </div>
     </header>
   );

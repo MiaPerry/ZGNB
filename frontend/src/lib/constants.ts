@@ -40,10 +40,10 @@ export const RISK_COLORS: Record<string, string> = {
 // 导航菜单
 export const NAV_ITEMS = [
   { path: '/', label: '总览', icon: '◈' },
-  { path: '/stocks', label: '股票', icon: '▤' },
-  { path: '/screen', label: '选股', icon: '◎' },
+  { path: '/stocks', label: '数据', icon: '▤' },
+  { path: '/screen', label: '筛选', icon: '◎' },
   { path: '/watchlist', label: '自选', icon: '★' },
   { path: '/backtest', label: '回测', icon: '⟲' },
-  { path: '/trades', label: '交易', icon: '⇄' },
+  { path: '/trades', label: '记录', icon: '⇄' },
   { path: '/settings', label: '设置', icon: '⚙' },
 ] as const;

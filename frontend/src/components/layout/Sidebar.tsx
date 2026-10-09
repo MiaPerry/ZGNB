@@ -40,7 +40,7 @@ export default function Sidebar() {
       <div className="flex h-12 items-center gap-2 border-b border-border px-3 shrink-0">
         <span className="text-lg text-accent-gold shrink-0">Z</span>
         {!collapsed && (
-          <span className="text-sm font-bold text-text-primary whitespace-nowrap">哥量化</span>
+          <span className="text-sm font-bold text-text-primary whitespace-nowrap">Quantification</span>
         )}
       </div>
 

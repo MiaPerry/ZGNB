@@ -43,7 +43,7 @@ export default function Dashboard() {
       {/* Hero Search */}
       <div className="flex flex-col items-center justify-center py-16 relative">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-accent-blue/10 via-transparent to-transparent blur-2xl -z-10" />
-        <h1 className="text-4xl font-extrabold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-accent-gold via-accent-red to-accent-purple mb-3">Z哥量化终端</h1>
+        <h1 className="text-4xl font-extrabold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-accent-gold via-accent-red to-accent-purple mb-3">Quantitative</h1>
         <p className="text-sm font-medium text-text-muted mb-8 tracking-wide">用系统化思维，捕捉确定性利润</p>
         <form onSubmit={handleSearch} className="flex items-center gap-3 relative z-10 w-full max-w-lg">
           <input
@@ -55,7 +55,7 @@ export default function Dashboard() {
           />
           <button
             type="submit"
-            className="rounded-xl bg-gradient-to-r from-accent-gold to-accent-red px-8 py-4 text-sm font-bold text-white hover:opacity-90 active:scale-95 transition-all shadow-lg shadow-accent-red/20"
+            className="shrink-0 whitespace-nowrap rounded-xl bg-gradient-to-r from-accent-gold to-accent-red px-8 py-4 text-sm font-bold text-white hover:opacity-90 active:scale-95 transition-all shadow-lg shadow-accent-red/20"
           >
             分析
           </button>
