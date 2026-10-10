@@ -18,7 +18,7 @@ _BACKEND_TYPES = {
     "rules": {".yaml", ".yml", ".md"},
     "knowledge": {".md"},
 }
-_STATIC_FILES = {"requirements.txt", "pyproject.toml", "SKILL.md", "data/nasdaq100.json"}
+_STATIC_FILES = {"requirements.txt", "pyproject.toml", "SKILL.md", "data/nasdaq100.json", "data/sp500.json"}
 _FRONTEND_TYPES = {
     ".html",
     ".js",
