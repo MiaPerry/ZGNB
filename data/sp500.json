@@ -1,0 +1,2523 @@
+{
+  "index": "S&P 500",
+  "snapshot_date": "2026-10-10",
+  "source": "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
+  "note": "当前成分股快照。用今日名单回测历史存在幸存者偏差（已剔除期间被踢出指数的弱势股），回测收益会系统性偏高，仅供策略逻辑学习，不能作为实盘收益预期。名单不定期调整，新上市成分股历史不足 5 年属正常。",
+  "constituents": [
+    {
+      "ticker": "MMM",
+      "name": "3M",
+      "sector": "工业"
+    },
+    {
+      "ticker": "AOS",
+      "name": "A. O. Smith",
+      "sector": "工业"
+    },
+    {
+      "ticker": "ABT",
+      "name": "雅培",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "ABBV",
+      "name": "艾伯维",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "ACN",
+      "name": "埃森哲",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "ADBE",
+      "name": "Adobe",
+      "sector": "创意软件"
+    },
+    {
+      "ticker": "AMD",
+      "name": "AMD",
+      "sector": "半导体"
+    },
+    {
+      "ticker": "AES",
+      "name": "AES",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "AFL",
+      "name": "美国家庭人寿",
+      "sector": "金融"
+    },
+    {
+      "ticker": "A",
+      "name": "Agilent Technologies",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "APD",
+      "name": "空气化工",
+      "sector": "材料"
+    },
+    {
+      "ticker": "ABNB",
+      "name": "爱彼迎",
+      "sector": "在线旅游"
+    },
+    {
+      "ticker": "AKAM",
+      "name": "阿卡迈",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "ALB",
+      "name": "Albemarle Corporation",
+      "sector": "材料"
+    },
+    {
+      "ticker": "ARE",
+      "name": "Alexandria地产",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "ALGN",
+      "name": "Align Technology",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "ALLE",
+      "name": "Allegion",
+      "sector": "工业"
+    },
+    {
+      "ticker": "LNT",
+      "name": "Alliant能源",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "ALL",
+      "name": "好事达",
+      "sector": "金融"
+    },
+    {
+      "ticker": "GOOGL",
+      "name": "谷歌A",
+      "sector": "互联网"
+    },
+    {
+      "ticker": "GOOG",
+      "name": "谷歌C",
+      "sector": "互联网"
+    },
+    {
+      "ticker": "MO",
+      "name": "奥驰亚",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "AMZN",
+      "name": "亚马逊",
+      "sector": "电商云"
+    },
+    {
+      "ticker": "AMCR",
+      "name": "安姆科",
+      "sector": "材料"
+    },
+    {
+      "ticker": "AEE",
+      "name": "Ameren",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "AEP",
+      "name": "美国电力",
+      "sector": "电力公用事业"
+    },
+    {
+      "ticker": "AXP",
+      "name": "美国运通",
+      "sector": "金融"
+    },
+    {
+      "ticker": "AIG",
+      "name": "美国国际集团",
+      "sector": "金融"
+    },
+    {
+      "ticker": "AMT",
+      "name": "美国电塔",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "AWK",
+      "name": "美国水务",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "AMP",
+      "name": "Ameriprise Financial",
+      "sector": "金融"
+    },
+    {
+      "ticker": "AME",
+      "name": "阿美特克",
+      "sector": "工业"
+    },
+    {
+      "ticker": "AMGN",
+      "name": "安进",
+      "sector": "生物科技"
+    },
+    {
+      "ticker": "APH",
+      "name": "安费诺",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "ADI",
+      "name": "亚德诺",
+      "sector": "半导体"
+    },
+    {
+      "ticker": "AON",
+      "name": "怡安",
+      "sector": "金融"
+    },
+    {
+      "ticker": "APA",
+      "name": "APA",
+      "sector": "能源"
+    },
+    {
+      "ticker": "APO",
+      "name": "阿波罗全球",
+      "sector": "金融"
+    },
+    {
+      "ticker": "AAPL",
+      "name": "苹果",
+      "sector": "消费电子"
+    },
+    {
+      "ticker": "AMAT",
+      "name": "应用材料",
+      "sector": "半导体设备"
+    },
+    {
+      "ticker": "APP",
+      "name": "AppLovin",
+      "sector": "广告软件"
+    },
+    {
+      "ticker": "APTV",
+      "name": "Aptiv",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "ACGL",
+      "name": "Arch Capital Group",
+      "sector": "金融"
+    },
+    {
+      "ticker": "ADM",
+      "name": "Archer Daniels Midland",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "ARES",
+      "name": "Ares资管",
+      "sector": "金融"
+    },
+    {
+      "ticker": "ANET",
+      "name": "Arista网络",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "AJG",
+      "name": "加拉赫",
+      "sector": "金融"
+    },
+    {
+      "ticker": "AIZ",
+      "name": "Assurant",
+      "sector": "金融"
+    },
+    {
+      "ticker": "T",
+      "name": "AT&T",
+      "sector": "通信服务"
+    },
+    {
+      "ticker": "ATO",
+      "name": "Atmos能源",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "ADSK",
+      "name": "欧特克",
+      "sector": "设计软件"
+    },
+    {
+      "ticker": "ADP",
+      "name": "自动数据处理",
+      "sector": "人力资源服务"
+    },
+    {
+      "ticker": "AZO",
+      "name": "AutoZone",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "AVY",
+      "name": "艾利丹尼森",
+      "sector": "材料"
+    },
+    {
+      "ticker": "AXON",
+      "name": "Axon",
+      "sector": "执法装备"
+    },
+    {
+      "ticker": "BKR",
+      "name": "贝克休斯",
+      "sector": "油服设备"
+    },
+    {
+      "ticker": "BALL",
+      "name": "波尔",
+      "sector": "材料"
+    },
+    {
+      "ticker": "BAC",
+      "name": "美国银行",
+      "sector": "金融"
+    },
+    {
+      "ticker": "BAX",
+      "name": "Baxter International",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "BDX",
+      "name": "碧迪医疗",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "BRK-B",
+      "name": "伯克希尔哈撒韦",
+      "sector": "金融"
+    },
+    {
+      "ticker": "BBY",
+      "name": "百思买",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "TECH",
+      "name": "Bio-Techne",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "BIIB",
+      "name": "Biogen",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "BLK",
+      "name": "贝莱德",
+      "sector": "金融"
+    },
+    {
+      "ticker": "BX",
+      "name": "黑石集团",
+      "sector": "金融"
+    },
+    {
+      "ticker": "XYZ",
+      "name": "Block, Inc.",
+      "sector": "金融"
+    },
+    {
+      "ticker": "BE",
+      "name": "Bloom Energy",
+      "sector": "工业"
+    },
+    {
+      "ticker": "BNY",
+      "name": "BNY Mellon",
+      "sector": "金融"
+    },
+    {
+      "ticker": "BA",
+      "name": "波音",
+      "sector": "工业"
+    },
+    {
+      "ticker": "BKNG",
+      "name": "Booking",
+      "sector": "在线旅游"
+    },
+    {
+      "ticker": "BSX",
+      "name": "波士顿科学",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "BMY",
+      "name": "百时美施贵宝",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "AVGO",
+      "name": "博通",
+      "sector": "半导体"
+    },
+    {
+      "ticker": "BR",
+      "name": "Broadridge",
+      "sector": "工业"
+    },
+    {
+      "ticker": "BRO",
+      "name": "布朗兄弟保险",
+      "sector": "金融"
+    },
+    {
+      "ticker": "BF-B",
+      "name": "布朗霍文",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "BG",
+      "name": "Bunge Global",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "BXP",
+      "name": "BXP",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "CHRW",
+      "name": "罗宾逊物流",
+      "sector": "工业"
+    },
+    {
+      "ticker": "CDNS",
+      "name": "铿腾电子",
+      "sector": "EDA软件"
+    },
+    {
+      "ticker": "CPT",
+      "name": "Camden地产",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "COF",
+      "name": "第一资本",
+      "sector": "金融"
+    },
+    {
+      "ticker": "CAH",
+      "name": "Cardinal Health",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "CCL",
+      "name": "嘉年华邮轮",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "CARR",
+      "name": "开利",
+      "sector": "工业"
+    },
+    {
+      "ticker": "CVNA",
+      "name": "Carvana",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "CASY",
+      "name": "Casey's",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "CAT",
+      "name": "卡特彼勒",
+      "sector": "工业"
+    },
+    {
+      "ticker": "CBOE",
+      "name": "Cboe Global Markets",
+      "sector": "金融"
+    },
+    {
+      "ticker": "CBRE",
+      "name": "世邦魏理仕",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "CDW",
+      "name": "CDW Corporation",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "COR",
+      "name": "Cencora",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "CNC",
+      "name": "Centene Corporation",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "CNP",
+      "name": "CenterPoint",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "CF",
+      "name": "CF Industries",
+      "sector": "材料"
+    },
+    {
+      "ticker": "CRL",
+      "name": "Charles River Laboratories",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "SCHW",
+      "name": "嘉信理财",
+      "sector": "金融"
+    },
+    {
+      "ticker": "CHTR",
+      "name": "Charter Communications",
+      "sector": "通信服务"
+    },
+    {
+      "ticker": "CVX",
+      "name": "雪佛龙",
+      "sector": "能源"
+    },
+    {
+      "ticker": "CMG",
+      "name": "墨式烧烤",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "CB",
+      "name": "安达保险",
+      "sector": "金融"
+    },
+    {
+      "ticker": "CHD",
+      "name": "Church & Dwight",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "CIEN",
+      "name": "Ciena",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "CI",
+      "name": "Cigna",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "CINF",
+      "name": "辛辛那提金融",
+      "sector": "金融"
+    },
+    {
+      "ticker": "CTAS",
+      "name": "信达思",
+      "sector": "商业服务"
+    },
+    {
+      "ticker": "CSCO",
+      "name": "思科",
+      "sector": "网络设备"
+    },
+    {
+      "ticker": "C",
+      "name": "花旗集团",
+      "sector": "金融"
+    },
+    {
+      "ticker": "CFG",
+      "name": "公民金融",
+      "sector": "金融"
+    },
+    {
+      "ticker": "CLX",
+      "name": "高乐氏",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "CME",
+      "name": "CME Group",
+      "sector": "金融"
+    },
+    {
+      "ticker": "CMS",
+      "name": "CMS能源",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "KO",
+      "name": "可口可乐",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "CTSH",
+      "name": "高知特",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "COHR",
+      "name": "相干公司",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "COIN",
+      "name": "Coinbase",
+      "sector": "金融"
+    },
+    {
+      "ticker": "CL",
+      "name": "高露洁",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "CMCSA",
+      "name": "康卡斯特",
+      "sector": "有线电视"
+    },
+    {
+      "ticker": "FIX",
+      "name": "Comfort Systems USA",
+      "sector": "工业"
+    },
+    {
+      "ticker": "COP",
+      "name": "康菲石油",
+      "sector": "能源"
+    },
+    {
+      "ticker": "ED",
+      "name": "联合爱迪生",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "STZ",
+      "name": "星座品牌",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "CEG",
+      "name": "星座能源",
+      "sector": "电力公用事业"
+    },
+    {
+      "ticker": "COO",
+      "name": "Cooper Companies (The)",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "CPRT",
+      "name": "Copart",
+      "sector": "汽车拍卖"
+    },
+    {
+      "ticker": "GLW",
+      "name": "康宁",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "CPAY",
+      "name": "Corpay",
+      "sector": "金融"
+    },
+    {
+      "ticker": "CSGP",
+      "name": "CoStar Group",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "COST",
+      "name": "好市多",
+      "sector": "零售"
+    },
+    {
+      "ticker": "CRH",
+      "name": "CRH plc",
+      "sector": "材料"
+    },
+    {
+      "ticker": "CRWD",
+      "name": "CrowdStrike",
+      "sector": "网络安全"
+    },
+    {
+      "ticker": "CCI",
+      "name": "皇冠城堡",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "CSX",
+      "name": "CSX铁路",
+      "sector": "铁路运输"
+    },
+    {
+      "ticker": "CMI",
+      "name": "康明斯",
+      "sector": "工业"
+    },
+    {
+      "ticker": "CVS",
+      "name": "CVS Health",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "DHR",
+      "name": "丹纳赫",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "DRI",
+      "name": "Darden Restaurants",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "DDOG",
+      "name": "Datadog",
+      "sector": "云监控"
+    },
+    {
+      "ticker": "DVA",
+      "name": "DaVita",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "DECK",
+      "name": "Deckers Brands",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "DE",
+      "name": "迪尔",
+      "sector": "工业"
+    },
+    {
+      "ticker": "DELL",
+      "name": "戴尔",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "DAL",
+      "name": "达美航空",
+      "sector": "工业"
+    },
+    {
+      "ticker": "DVN",
+      "name": "戴文能源",
+      "sector": "能源"
+    },
+    {
+      "ticker": "DXCM",
+      "name": "德康医疗",
+      "sector": "医疗器械"
+    },
+    {
+      "ticker": "FANG",
+      "name": "响尾蛇能源",
+      "sector": "油气开采"
+    },
+    {
+      "ticker": "DLR",
+      "name": "Digital Realty",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "DG",
+      "name": "达乐",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "DLTR",
+      "name": "美元树",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "D",
+      "name": "道明尼能源",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "DPZ",
+      "name": "Domino's",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "DASH",
+      "name": "DoorDash",
+      "sector": "外卖平台"
+    },
+    {
+      "ticker": "DOV",
+      "name": "多福",
+      "sector": "工业"
+    },
+    {
+      "ticker": "DOW",
+      "name": "陶氏化学",
+      "sector": "材料"
+    },
+    {
+      "ticker": "DHI",
+      "name": "霍顿房屋",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "DTE",
+      "name": "DTE能源",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "DUK",
+      "name": "杜克能源",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "DD",
+      "name": "杜邦",
+      "sector": "工业"
+    },
+    {
+      "ticker": "ETN",
+      "name": "伊顿",
+      "sector": "工业"
+    },
+    {
+      "ticker": "EBAY",
+      "name": "eBay Inc.",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "ECHO",
+      "name": "EchoStar",
+      "sector": "通信服务"
+    },
+    {
+      "ticker": "ECL",
+      "name": "艺康",
+      "sector": "材料"
+    },
+    {
+      "ticker": "EIX",
+      "name": "爱迪生国际",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "EW",
+      "name": "Edwards Lifesciences",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "ELV",
+      "name": "Elevance Health",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "EME",
+      "name": "Emcor",
+      "sector": "工业"
+    },
+    {
+      "ticker": "EMR",
+      "name": "艾默生",
+      "sector": "工业"
+    },
+    {
+      "ticker": "ETR",
+      "name": "Entergy",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "EOG",
+      "name": "EOG资源",
+      "sector": "能源"
+    },
+    {
+      "ticker": "EQT",
+      "name": "EQT",
+      "sector": "能源"
+    },
+    {
+      "ticker": "EFX",
+      "name": "艾可菲",
+      "sector": "工业"
+    },
+    {
+      "ticker": "EQIX",
+      "name": "Equinix",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "ERIE",
+      "name": "Erie Indemnity",
+      "sector": "金融"
+    },
+    {
+      "ticker": "ESS",
+      "name": "Essex地产",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "EL",
+      "name": "雅诗兰黛",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "EG",
+      "name": "Everest Group",
+      "sector": "金融"
+    },
+    {
+      "ticker": "EVRG",
+      "name": "Evergy",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "P",
+      "name": "Everpure",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "ES",
+      "name": "Eversource能源",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "EXC",
+      "name": "爱克斯龙",
+      "sector": "电力公用事业"
+    },
+    {
+      "ticker": "EXE",
+      "name": "Expand Energy",
+      "sector": "能源"
+    },
+    {
+      "ticker": "EXPE",
+      "name": "亿客行",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "EXPD",
+      "name": "康捷国际",
+      "sector": "工业"
+    },
+    {
+      "ticker": "EXR",
+      "name": "Extra Space",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "XOM",
+      "name": "埃克森美孚",
+      "sector": "能源"
+    },
+    {
+      "ticker": "FFIV",
+      "name": "F5, Inc.",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "FDS",
+      "name": "FactSet",
+      "sector": "金融"
+    },
+    {
+      "ticker": "FICO",
+      "name": "Fair Isaac",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "FAST",
+      "name": "快扣",
+      "sector": "工业分销"
+    },
+    {
+      "ticker": "FRT",
+      "name": "Federal Realty Investment Trust",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "FDX",
+      "name": "联邦快递",
+      "sector": "工业"
+    },
+    {
+      "ticker": "FDXF",
+      "name": "FedEx Freight",
+      "sector": "工业"
+    },
+    {
+      "ticker": "FERG",
+      "name": "Ferguson Enterprises",
+      "sector": "工业"
+    },
+    {
+      "ticker": "FIS",
+      "name": "FIS",
+      "sector": "金融"
+    },
+    {
+      "ticker": "FITB",
+      "name": "五三银行",
+      "sector": "金融"
+    },
+    {
+      "ticker": "FSLR",
+      "name": "第一太阳能",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "FE",
+      "name": "第一能源",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "FISV",
+      "name": "Fiserv",
+      "sector": "金融"
+    },
+    {
+      "ticker": "FLEX",
+      "name": "Flex Ltd.",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "F",
+      "name": "福特汽车",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "FTNT",
+      "name": "飞塔",
+      "sector": "网络安全"
+    },
+    {
+      "ticker": "FTV",
+      "name": "Fortive",
+      "sector": "工业"
+    },
+    {
+      "ticker": "FOXA",
+      "name": "福克斯A",
+      "sector": "通信服务"
+    },
+    {
+      "ticker": "FOX",
+      "name": "福克斯B",
+      "sector": "通信服务"
+    },
+    {
+      "ticker": "BEN",
+      "name": "富兰克林资源",
+      "sector": "金融"
+    },
+    {
+      "ticker": "FCX",
+      "name": "自由港麦克莫兰",
+      "sector": "材料"
+    },
+    {
+      "ticker": "GRMN",
+      "name": "Garmin",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "IT",
+      "name": "Gartner",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "GE",
+      "name": "GE航空航天",
+      "sector": "工业"
+    },
+    {
+      "ticker": "GEHC",
+      "name": "GE医疗",
+      "sector": "医疗设备"
+    },
+    {
+      "ticker": "GEV",
+      "name": "GE Vernova",
+      "sector": "工业"
+    },
+    {
+      "ticker": "GEN",
+      "name": "Gen Digital",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "GNRC",
+      "name": "Generac",
+      "sector": "工业"
+    },
+    {
+      "ticker": "GD",
+      "name": "通用动力",
+      "sector": "工业"
+    },
+    {
+      "ticker": "GIS",
+      "name": "通用磨坊",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "GM",
+      "name": "通用汽车",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "GPC",
+      "name": "Genuine Parts",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "GILD",
+      "name": "吉利德",
+      "sector": "生物科技"
+    },
+    {
+      "ticker": "GPN",
+      "name": "Global Payments",
+      "sector": "金融"
+    },
+    {
+      "ticker": "GL",
+      "name": "Globe Life",
+      "sector": "金融"
+    },
+    {
+      "ticker": "GDDY",
+      "name": "GoDaddy",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "GS",
+      "name": "高盛",
+      "sector": "金融"
+    },
+    {
+      "ticker": "HAL",
+      "name": "哈里伯顿",
+      "sector": "能源"
+    },
+    {
+      "ticker": "HIG",
+      "name": "哈特福德",
+      "sector": "金融"
+    },
+    {
+      "ticker": "HAS",
+      "name": "孩之宝",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "HCA",
+      "name": "HCA Healthcare",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "DOC",
+      "name": "Healthpeak Properties",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "HSIC",
+      "name": "Henry Schein",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "HSY",
+      "name": "好时",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "HPE",
+      "name": "慧与",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "HLT",
+      "name": "希尔顿",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "HD",
+      "name": "家得宝",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "HONA",
+      "name": "霍尼韦尔航空",
+      "sector": "航空航天"
+    },
+    {
+      "ticker": "HON",
+      "name": "霍尼韦尔",
+      "sector": "工业集团"
+    },
+    {
+      "ticker": "HRL",
+      "name": "荷美尔",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "HST",
+      "name": "Host酒店",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "HWM",
+      "name": "Howmet Aerospace",
+      "sector": "工业"
+    },
+    {
+      "ticker": "HPQ",
+      "name": "惠普",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "HUBB",
+      "name": "Hubbell Incorporated",
+      "sector": "工业"
+    },
+    {
+      "ticker": "HUM",
+      "name": "Humana",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "HBAN",
+      "name": "亨廷顿银行",
+      "sector": "金融"
+    },
+    {
+      "ticker": "HII",
+      "name": "亨廷顿英格尔斯",
+      "sector": "工业"
+    },
+    {
+      "ticker": "IBM",
+      "name": "IBM",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "IEX",
+      "name": "IDEX",
+      "sector": "工业"
+    },
+    {
+      "ticker": "IDXX",
+      "name": "爱德士",
+      "sector": "动物医疗"
+    },
+    {
+      "ticker": "ITW",
+      "name": "伊利诺伊工具",
+      "sector": "工业"
+    },
+    {
+      "ticker": "ILMN",
+      "name": "Illumina, Inc.",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "INCY",
+      "name": "Incyte",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "IR",
+      "name": "英格索兰",
+      "sector": "工业"
+    },
+    {
+      "ticker": "PODD",
+      "name": "Insulet Corporation",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "INTC",
+      "name": "英特尔",
+      "sector": "半导体"
+    },
+    {
+      "ticker": "IBKR",
+      "name": "Interactive Brokers",
+      "sector": "金融"
+    },
+    {
+      "ticker": "ICE",
+      "name": "Intercontinental Exchange",
+      "sector": "金融"
+    },
+    {
+      "ticker": "IFF",
+      "name": "International Flavors & Fragrances",
+      "sector": "材料"
+    },
+    {
+      "ticker": "IP",
+      "name": "国际纸业",
+      "sector": "材料"
+    },
+    {
+      "ticker": "INTU",
+      "name": "财捷",
+      "sector": "财务软件"
+    },
+    {
+      "ticker": "ISRG",
+      "name": "直觉外科",
+      "sector": "手术机器人"
+    },
+    {
+      "ticker": "IVZ",
+      "name": "景顺",
+      "sector": "金融"
+    },
+    {
+      "ticker": "INVH",
+      "name": "Invitation Homes",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "IQV",
+      "name": "IQVIA",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "IRM",
+      "name": "Iron Mountain",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "JBHT",
+      "name": "JB亨特",
+      "sector": "工业"
+    },
+    {
+      "ticker": "JBL",
+      "name": "Jabil",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "JKHY",
+      "name": "Jack Henry",
+      "sector": "金融"
+    },
+    {
+      "ticker": "J",
+      "name": "Jacobs Solutions",
+      "sector": "工业"
+    },
+    {
+      "ticker": "JNJ",
+      "name": "强生",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "JCI",
+      "name": "江森自控",
+      "sector": "工业"
+    },
+    {
+      "ticker": "JPM",
+      "name": "摩根大通",
+      "sector": "金融"
+    },
+    {
+      "ticker": "KVUE",
+      "name": "Kenvue",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "KDP",
+      "name": "胡椒博士",
+      "sector": "饮料"
+    },
+    {
+      "ticker": "KEY",
+      "name": "KeyCorp",
+      "sector": "金融"
+    },
+    {
+      "ticker": "KEYS",
+      "name": "是德科技",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "KMB",
+      "name": "金佰利",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "KIM",
+      "name": "Kimco地产",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "KMI",
+      "name": "金德摩根",
+      "sector": "能源"
+    },
+    {
+      "ticker": "KKR",
+      "name": "KKR",
+      "sector": "金融"
+    },
+    {
+      "ticker": "KLAC",
+      "name": "科磊",
+      "sector": "半导体设备"
+    },
+    {
+      "ticker": "KHC",
+      "name": "卡夫亨氏",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "KR",
+      "name": "克罗格",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "LHX",
+      "name": "L3哈里斯",
+      "sector": "工业"
+    },
+    {
+      "ticker": "LH",
+      "name": "Labcorp",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "LRCX",
+      "name": "泛林",
+      "sector": "半导体设备"
+    },
+    {
+      "ticker": "LVS",
+      "name": "Las Vegas Sands",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "LDOS",
+      "name": "Leidos",
+      "sector": "工业"
+    },
+    {
+      "ticker": "LEN",
+      "name": "莱纳",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "LII",
+      "name": "Lennox International",
+      "sector": "工业"
+    },
+    {
+      "ticker": "LLY",
+      "name": "礼来",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "LIN",
+      "name": "林德",
+      "sector": "工业气体"
+    },
+    {
+      "ticker": "LYV",
+      "name": "Live Nation",
+      "sector": "通信服务"
+    },
+    {
+      "ticker": "LMT",
+      "name": "洛克希德马丁",
+      "sector": "工业"
+    },
+    {
+      "ticker": "L",
+      "name": "洛斯保险",
+      "sector": "金融"
+    },
+    {
+      "ticker": "LOW",
+      "name": "劳氏",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "LULU",
+      "name": "Lululemon Athletica",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "LITE",
+      "name": "Lumentum",
+      "sector": "光通信"
+    },
+    {
+      "ticker": "LYB",
+      "name": "利安德巴塞尔",
+      "sector": "材料"
+    },
+    {
+      "ticker": "MTB",
+      "name": "M&T银行",
+      "sector": "金融"
+    },
+    {
+      "ticker": "MPC",
+      "name": "马拉松石油",
+      "sector": "能源"
+    },
+    {
+      "ticker": "MAR",
+      "name": "万豪",
+      "sector": "酒店"
+    },
+    {
+      "ticker": "MRSH",
+      "name": "Marsh McLennan",
+      "sector": "金融"
+    },
+    {
+      "ticker": "MLM",
+      "name": "马丁玛丽埃塔",
+      "sector": "材料"
+    },
+    {
+      "ticker": "MRVL",
+      "name": "迈威尔",
+      "sector": "半导体"
+    },
+    {
+      "ticker": "MAS",
+      "name": "Masco",
+      "sector": "工业"
+    },
+    {
+      "ticker": "MA",
+      "name": "万事达",
+      "sector": "金融"
+    },
+    {
+      "ticker": "MKC",
+      "name": "味好美",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "MCD",
+      "name": "麦当劳",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "MCK",
+      "name": "McKesson Corporation",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "MDT",
+      "name": "美敦力",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "MRK",
+      "name": "默克",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "META",
+      "name": "Meta",
+      "sector": "社交平台"
+    },
+    {
+      "ticker": "MET",
+      "name": "大都会人寿",
+      "sector": "金融"
+    },
+    {
+      "ticker": "MTD",
+      "name": "Mettler Toledo",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "MGM",
+      "name": "MGM Resorts",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "MCHP",
+      "name": "微芯科技",
+      "sector": "半导体"
+    },
+    {
+      "ticker": "MU",
+      "name": "美光",
+      "sector": "存储芯片"
+    },
+    {
+      "ticker": "MSFT",
+      "name": "微软",
+      "sector": "软件服务"
+    },
+    {
+      "ticker": "MAA",
+      "name": "MAA公寓",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "MRNA",
+      "name": "Moderna",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "MDLZ",
+      "name": "亿滋",
+      "sector": "包装食品"
+    },
+    {
+      "ticker": "MPWR",
+      "name": "芯源系统",
+      "sector": "半导体"
+    },
+    {
+      "ticker": "MNST",
+      "name": "怪物饮料",
+      "sector": "饮料"
+    },
+    {
+      "ticker": "MCO",
+      "name": "穆迪",
+      "sector": "金融"
+    },
+    {
+      "ticker": "MS",
+      "name": "摩根士丹利",
+      "sector": "金融"
+    },
+    {
+      "ticker": "MOS",
+      "name": "Mosaic Company (The)",
+      "sector": "材料"
+    },
+    {
+      "ticker": "MSI",
+      "name": "摩托罗拉系统",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "MSCI",
+      "name": "MSCI明晟",
+      "sector": "金融"
+    },
+    {
+      "ticker": "NDAQ",
+      "name": "Nasdaq, Inc.",
+      "sector": "金融"
+    },
+    {
+      "ticker": "NTAP",
+      "name": "NetApp",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "NFLX",
+      "name": "奈飞",
+      "sector": "流媒体"
+    },
+    {
+      "ticker": "NEM",
+      "name": "纽蒙特矿业",
+      "sector": "材料"
+    },
+    {
+      "ticker": "NWSA",
+      "name": "新闻集团A",
+      "sector": "通信服务"
+    },
+    {
+      "ticker": "NWS",
+      "name": "新闻集团",
+      "sector": "通信服务"
+    },
+    {
+      "ticker": "NEE",
+      "name": "新纪元能源",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "NKE",
+      "name": "耐克",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "NI",
+      "name": "NiSource",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "NDSN",
+      "name": "诺信",
+      "sector": "工业"
+    },
+    {
+      "ticker": "NSC",
+      "name": "诺福克南方",
+      "sector": "工业"
+    },
+    {
+      "ticker": "NTRS",
+      "name": "北方信托",
+      "sector": "金融"
+    },
+    {
+      "ticker": "NOC",
+      "name": "诺斯罗普格鲁曼",
+      "sector": "工业"
+    },
+    {
+      "ticker": "NCLH",
+      "name": "挪威邮轮",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "NRG",
+      "name": "NRG能源",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "NUE",
+      "name": "纽柯钢铁",
+      "sector": "材料"
+    },
+    {
+      "ticker": "NVDA",
+      "name": "英伟达",
+      "sector": "AI芯片"
+    },
+    {
+      "ticker": "NVR",
+      "name": "NVR",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "NXPI",
+      "name": "恩智浦",
+      "sector": "半导体"
+    },
+    {
+      "ticker": "ORLY",
+      "name": "奥莱利",
+      "sector": "汽车零部件零售"
+    },
+    {
+      "ticker": "OXY",
+      "name": "西方石油",
+      "sector": "能源"
+    },
+    {
+      "ticker": "ODFL",
+      "name": "老道明",
+      "sector": "货运物流"
+    },
+    {
+      "ticker": "OMC",
+      "name": "宏盟",
+      "sector": "通信服务"
+    },
+    {
+      "ticker": "ON",
+      "name": "安森美",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "OKE",
+      "name": "ONEOK",
+      "sector": "能源"
+    },
+    {
+      "ticker": "ORCL",
+      "name": "甲骨文",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "OTIS",
+      "name": "Otis Worldwide",
+      "sector": "工业"
+    },
+    {
+      "ticker": "PCAR",
+      "name": "帕卡",
+      "sector": "重型卡车"
+    },
+    {
+      "ticker": "PKG",
+      "name": "Packaging Corp",
+      "sector": "材料"
+    },
+    {
+      "ticker": "PLTR",
+      "name": "Palantir",
+      "sector": "数据分析AI"
+    },
+    {
+      "ticker": "PANW",
+      "name": "派拓网络",
+      "sector": "网络安全"
+    },
+    {
+      "ticker": "PH",
+      "name": "派克汉尼汾",
+      "sector": "工业"
+    },
+    {
+      "ticker": "PAYX",
+      "name": "沛齐",
+      "sector": "人力资源服务"
+    },
+    {
+      "ticker": "PYPL",
+      "name": "PayPal",
+      "sector": "支付"
+    },
+    {
+      "ticker": "PNR",
+      "name": "Pentair",
+      "sector": "工业"
+    },
+    {
+      "ticker": "PEP",
+      "name": "百事",
+      "sector": "饮料食品"
+    },
+    {
+      "ticker": "PFE",
+      "name": "辉瑞",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "PCG",
+      "name": "太平洋煤电",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "PM",
+      "name": "菲利普莫里斯",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "PSX",
+      "name": "Phillips 66",
+      "sector": "能源"
+    },
+    {
+      "ticker": "PNW",
+      "name": "Pinnacle West",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "PNC",
+      "name": "PNC金融",
+      "sector": "金融"
+    },
+    {
+      "ticker": "PPG",
+      "name": "PPG Industries",
+      "sector": "材料"
+    },
+    {
+      "ticker": "PPL",
+      "name": "PPL电力",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "PFG",
+      "name": "Principal Financial Group",
+      "sector": "金融"
+    },
+    {
+      "ticker": "PG",
+      "name": "宝洁",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "PGR",
+      "name": "前进保险",
+      "sector": "金融"
+    },
+    {
+      "ticker": "PLD",
+      "name": "普洛斯",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "PRU",
+      "name": "保德信",
+      "sector": "金融"
+    },
+    {
+      "ticker": "PEG",
+      "name": "PSEG",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "PTC",
+      "name": "PTC",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "PSA",
+      "name": "Public Storage",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "PHM",
+      "name": "普尔特",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "PWR",
+      "name": "Quanta Services",
+      "sector": "工业"
+    },
+    {
+      "ticker": "QCOM",
+      "name": "高通",
+      "sector": "通信芯片"
+    },
+    {
+      "ticker": "DGX",
+      "name": "Quest Diagnostics",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "Q",
+      "name": "Qnity Electronics",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "RL",
+      "name": "拉夫劳伦",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "RJF",
+      "name": "瑞杰金融",
+      "sector": "金融"
+    },
+    {
+      "ticker": "RDDT",
+      "name": "Reddit",
+      "sector": "通信服务"
+    },
+    {
+      "ticker": "RTX",
+      "name": "RTX雷神",
+      "sector": "工业"
+    },
+    {
+      "ticker": "O",
+      "name": "Realty Income",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "REG",
+      "name": "Regency Centers",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "REGN",
+      "name": "再生元",
+      "sector": "生物科技"
+    },
+    {
+      "ticker": "RF",
+      "name": "Regions金融",
+      "sector": "金融"
+    },
+    {
+      "ticker": "RSG",
+      "name": "Republic Services",
+      "sector": "工业"
+    },
+    {
+      "ticker": "RMD",
+      "name": "ResMed|",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "RVTY",
+      "name": "Revvity",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "HOOD",
+      "name": "Robinhood Markets",
+      "sector": "金融"
+    },
+    {
+      "ticker": "ROK",
+      "name": "罗克韦尔",
+      "sector": "工业"
+    },
+    {
+      "ticker": "ROL",
+      "name": "Rollins, Inc.",
+      "sector": "工业"
+    },
+    {
+      "ticker": "ROP",
+      "name": "罗珀科技",
+      "sector": "垂直软件"
+    },
+    {
+      "ticker": "ROST",
+      "name": "罗斯百货",
+      "sector": "折扣零售"
+    },
+    {
+      "ticker": "RCL",
+      "name": "皇家加勒比",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "SPGI",
+      "name": "标普全球",
+      "sector": "金融"
+    },
+    {
+      "ticker": "CRM",
+      "name": "Salesforce",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "SNDK",
+      "name": "闪迪",
+      "sector": "存储芯片"
+    },
+    {
+      "ticker": "SBAC",
+      "name": "SBA通信",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "SLB",
+      "name": "斯伦贝谢",
+      "sector": "能源"
+    },
+    {
+      "ticker": "STX",
+      "name": "希捷",
+      "sector": "存储硬件"
+    },
+    {
+      "ticker": "SRE",
+      "name": "桑普拉能源",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "NOW",
+      "name": "ServiceNow",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "SHW",
+      "name": "宣伟",
+      "sector": "材料"
+    },
+    {
+      "ticker": "SPG",
+      "name": "西蒙地产",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "SKYD",
+      "name": "Skydance Corporation",
+      "sector": "通信服务"
+    },
+    {
+      "ticker": "SWKS",
+      "name": "思佳讯",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "SJM",
+      "name": "斯味可",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "SW",
+      "name": "Smurfit Westrock",
+      "sector": "材料"
+    },
+    {
+      "ticker": "SNA",
+      "name": "Snap-on",
+      "sector": "工业"
+    },
+    {
+      "ticker": "SOLV",
+      "name": "Solventum",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "SO",
+      "name": "南方电力",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "LUV",
+      "name": "西南航空",
+      "sector": "工业"
+    },
+    {
+      "ticker": "SWK",
+      "name": "史丹利百得",
+      "sector": "工业"
+    },
+    {
+      "ticker": "SBUX",
+      "name": "星巴克",
+      "sector": "餐饮"
+    },
+    {
+      "ticker": "STT",
+      "name": "道富银行",
+      "sector": "金融"
+    },
+    {
+      "ticker": "STLD",
+      "name": "Steel Dynamics",
+      "sector": "材料"
+    },
+    {
+      "ticker": "STE",
+      "name": "Steris",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "SYK",
+      "name": "史赛克",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "SMCI",
+      "name": "超微电脑",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "SYF",
+      "name": "同步金融",
+      "sector": "金融"
+    },
+    {
+      "ticker": "SNPS",
+      "name": "新思科技",
+      "sector": "EDA软件"
+    },
+    {
+      "ticker": "SYY",
+      "name": "西斯科",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "TMUS",
+      "name": "T-Mobile",
+      "sector": "电信运营"
+    },
+    {
+      "ticker": "TROW",
+      "name": "普信集团",
+      "sector": "金融"
+    },
+    {
+      "ticker": "TTWO",
+      "name": "Take-Two",
+      "sector": "游戏"
+    },
+    {
+      "ticker": "TPR",
+      "name": "Tapestry",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "TRGP",
+      "name": "Targa资源",
+      "sector": "能源"
+    },
+    {
+      "ticker": "TGT",
+      "name": "塔吉特",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "TEL",
+      "name": "TE连接",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "TDY",
+      "name": "Teledyne",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "TER",
+      "name": "泰瑞达",
+      "sector": "半导体测试"
+    },
+    {
+      "ticker": "TSLA",
+      "name": "特斯拉",
+      "sector": "新能源汽车"
+    },
+    {
+      "ticker": "TXN",
+      "name": "德州仪器",
+      "sector": "半导体"
+    },
+    {
+      "ticker": "TPL",
+      "name": "德州太平洋",
+      "sector": "能源"
+    },
+    {
+      "ticker": "TXT",
+      "name": "德事隆",
+      "sector": "工业"
+    },
+    {
+      "ticker": "TMO",
+      "name": "赛默飞",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "TJX",
+      "name": "TJX公司",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "TKO",
+      "name": "TKO Group Holdings",
+      "sector": "通信服务"
+    },
+    {
+      "ticker": "TSCO",
+      "name": "Tractor Supply",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "TT",
+      "name": "特灵科技",
+      "sector": "工业"
+    },
+    {
+      "ticker": "TDG",
+      "name": "TransDigm",
+      "sector": "工业"
+    },
+    {
+      "ticker": "TRV",
+      "name": "旅行者保险",
+      "sector": "金融"
+    },
+    {
+      "ticker": "TRMB",
+      "name": "天宝导航",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "TFC",
+      "name": "Truist金融",
+      "sector": "金融"
+    },
+    {
+      "ticker": "TWLO",
+      "name": "Twilio",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "TYL",
+      "name": "Tyler科技",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "TSN",
+      "name": "泰森食品",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "USB",
+      "name": "美国合众银行",
+      "sector": "金融"
+    },
+    {
+      "ticker": "UBER",
+      "name": "优步",
+      "sector": "工业"
+    },
+    {
+      "ticker": "UDR",
+      "name": "UDR公寓",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "ULTA",
+      "name": "Ulta Beauty",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "UNP",
+      "name": "联合太平洋",
+      "sector": "工业"
+    },
+    {
+      "ticker": "UAL",
+      "name": "联合航空",
+      "sector": "工业"
+    },
+    {
+      "ticker": "UPS",
+      "name": "联合包裹",
+      "sector": "工业"
+    },
+    {
+      "ticker": "URI",
+      "name": "United Rentals",
+      "sector": "工业"
+    },
+    {
+      "ticker": "UNH",
+      "name": "联合健康",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "UHS",
+      "name": "Universal Health Services",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "VLO",
+      "name": "瓦莱罗能源",
+      "sector": "能源"
+    },
+    {
+      "ticker": "VEEV",
+      "name": "Veeva",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "VTR",
+      "name": "Ventas",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "VLTO",
+      "name": "Veralto",
+      "sector": "工业"
+    },
+    {
+      "ticker": "VRSN",
+      "name": "威瑞信",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "VRSK",
+      "name": "Verisk",
+      "sector": "工业"
+    },
+    {
+      "ticker": "VZ",
+      "name": "威瑞森",
+      "sector": "通信服务"
+    },
+    {
+      "ticker": "VRTX",
+      "name": "福泰制药",
+      "sector": "生物科技"
+    },
+    {
+      "ticker": "VRT",
+      "name": "Vertiv",
+      "sector": "工业"
+    },
+    {
+      "ticker": "VTRS",
+      "name": "Viatris",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "VICI",
+      "name": "VICI地产",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "V",
+      "name": "Visa",
+      "sector": "金融"
+    },
+    {
+      "ticker": "VST",
+      "name": "Vistra",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "VMRK",
+      "name": "Vivmark Residential",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "VMC",
+      "name": "火神材料",
+      "sector": "材料"
+    },
+    {
+      "ticker": "VYLR",
+      "name": "Vylor",
+      "sector": "必需消费"
+    },
+    {
+      "ticker": "WRB",
+      "name": "WR Berkley",
+      "sector": "金融"
+    },
+    {
+      "ticker": "GWW",
+      "name": "W. W. Grainger",
+      "sector": "工业"
+    },
+    {
+      "ticker": "WAB",
+      "name": "西屋制动",
+      "sector": "工业"
+    },
+    {
+      "ticker": "WMT",
+      "name": "沃尔玛",
+      "sector": "零售"
+    },
+    {
+      "ticker": "DIS",
+      "name": "迪士尼",
+      "sector": "通信服务"
+    },
+    {
+      "ticker": "WM",
+      "name": "废物管理",
+      "sector": "工业"
+    },
+    {
+      "ticker": "WAT",
+      "name": "Waters Corporation",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "WEC",
+      "name": "WEC能源",
+      "sector": "公用事业"
+    },
+    {
+      "ticker": "WFC",
+      "name": "富国银行",
+      "sector": "金融"
+    },
+    {
+      "ticker": "WELL",
+      "name": "Welltower",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "WST",
+      "name": "West Pharmaceutical Services",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "WDC",
+      "name": "西部数据",
+      "sector": "存储硬件"
+    },
+    {
+      "ticker": "WY",
+      "name": "惠好",
+      "sector": "房地产"
+    },
+    {
+      "ticker": "WSM",
+      "name": "威廉姆斯索诺玛",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "WMB",
+      "name": "威廉姆斯",
+      "sector": "能源"
+    },
+    {
+      "ticker": "WTW",
+      "name": "Willis Towers Watson",
+      "sector": "金融"
+    },
+    {
+      "ticker": "WDAY",
+      "name": "Workday",
+      "sector": "企业软件"
+    },
+    {
+      "ticker": "WYNN",
+      "name": "Wynn Resorts",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "XEL",
+      "name": "埃克西尔能源",
+      "sector": "电力公用事业"
+    },
+    {
+      "ticker": "XYL",
+      "name": "赛莱默",
+      "sector": "工业"
+    },
+    {
+      "ticker": "YUM",
+      "name": "百胜餐饮",
+      "sector": "非必需消费"
+    },
+    {
+      "ticker": "ZBRA",
+      "name": "斑马技术",
+      "sector": "信息技术"
+    },
+    {
+      "ticker": "ZBH",
+      "name": "Zimmer Biomet",
+      "sector": "医疗保健"
+    },
+    {
+      "ticker": "ZTS",
+      "name": "Zoetis",
+      "sector": "医疗保健"
+    }
+  ]
+}

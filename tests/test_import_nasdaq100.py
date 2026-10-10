@@ -94,6 +94,33 @@ def test_compute_backfill_start():
     assert compute_backfill_start(datetime(2026, 9, 22, 10, 0), years=5) == "20210922"
 
 
+def test_main_start_overrides_rolling_backfill_start(temp_db, monkeypatch, capsys):
+    """--start 固定回补起点优先于 --years 滚动窗口"""
+    from scripts import import_nasdaq100 as module
+
+    monkeypatch.setattr(module, "_beijing_now", lambda: datetime(2026, 10, 10, 15))
+    assert module.main(["--start", "20210922", "--dry-run", "--only", "ADI.US"]) == 0
+    assert "历史回补起点 20210922" in capsys.readouterr().out
+
+
+def test_main_without_start_keeps_rolling_years(temp_db, monkeypatch, capsys):
+    """不传 --start 时维持 --years 滚动起点"""
+    from scripts import import_nasdaq100 as module
+
+    monkeypatch.setattr(module, "_beijing_now", lambda: datetime(2026, 10, 10, 15))
+    assert module.main(["--dry-run", "--only", "ADI.US"]) == 0
+    assert "历史回补起点 20211010" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("bad", ["2021-09-22", "20211301", "2021922"])
+def test_main_start_rejects_invalid_format(temp_db, bad):
+    from scripts import import_nasdaq100 as module
+
+    with pytest.raises(SystemExit) as exc:
+        module.main(["--start", bad, "--dry-run", "--only", "ADI.US"])
+    assert exc.value.code == 2
+
+
 def test_latest_windows_use_each_stock_last_date_and_market(temp_db, db_conn):
     from scripts.import_nasdaq100 import plan_latest_windows
 

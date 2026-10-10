@@ -225,6 +225,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(description="NASDAQ-100 + 原有美股/港股：历史回补或 --latest 增量更新")
     p.add_argument("--list", default=str(DEFAULT_LIST_PATH), help="成分股 JSON 文件")
     p.add_argument("--years", type=int, default=5, help="回补年数（默认 5）")
+    p.add_argument("--start", default="", help="固定回补起点 YYYYMMDD（优先于 --years 滚动窗口）")
     p.add_argument("--no-existing", action="store_true", help="不回补库内现有美股/港股，只处理成分股")
     p.add_argument("--only", default="", help="只处理指定代码，逗号分隔（如 NVDA.US,ARM.US）")
     mode = p.add_mutually_exclusive_group()
@@ -236,6 +237,13 @@ def main(argv=None):
     args = p.parse_args(argv)
     if not 1 <= args.years <= 50 or args.pace < 0:
         p.error("years 必须为 1~50，pace 不能为负数")
+    if args.start:
+        if not (len(args.start) == 8 and args.start.isdigit()):
+            p.error("--start 必须为 YYYYMMDD 格式")
+        try:
+            datetime.strptime(args.start, "%Y%m%d")
+        except ValueError:
+            p.error("--start 不是有效日期")
     if args.latest and args.indicators_only:
         p.error("--latest 与 --indicators-only 不能同时使用")
     if not get_db_path().is_file():
@@ -255,7 +263,7 @@ def main(argv=None):
         codes = [c for c in codes if c in wanted]
 
     now = _beijing_now()
-    start_date = compute_backfill_start(now, args.years)
+    start_date = args.start or compute_backfill_start(now, args.years)
     end_by_market = {m: compute_market_end_date(now, m) for m in ("US", "HK")}
     windows = plan_latest_windows(codes, start_date, end_by_market) if args.latest else None
 
