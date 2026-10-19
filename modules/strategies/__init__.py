@@ -38,24 +38,24 @@ from .sell_signals import (
 def _post_process_signals(signals: list[StrategySignal]) -> list[StrategySignal]:
     """
     信号后处理：
-    1. 按日期+策略类型去重（同一天同一类型只保留置信度最高的）
-    2. 按优先级和日期排序
+    1. 去重：只合并同一天、同类型、同动作、同描述的重复信号（不同来源不互相覆盖）
+    2. 按日期降序排序，同日按优先级、置信度降序
     3. 截断：最多保留最近30个信号，且每个类型最多保留最近3个
     """
     if not signals:
         return []
 
-    # 1. 去重：同一天同一策略类型，保留置信度最高的
-    key_map: dict[tuple[str, str], StrategySignal] = {}
+    # 1. 去重：完全重复的信号保留置信度最高的
+    key_map: dict[tuple[str, str, str, str], StrategySignal] = {}
     for s in signals:
-        key = (s.trade_date, s.strategy.value)
+        key = (s.trade_date, s.strategy.value, s.action, s.description)
         if key not in key_map or s.confidence > key_map[key].confidence:
             key_map[key] = s
 
     deduped = list(key_map.values())
 
-    # 2. 按优先级降序、日期降序排序
-    deduped.sort(key=lambda x: (x.priority.value, x.confidence, x.trade_date), reverse=True)
+    # 2. 日期优先，保证截断时留下的是最新信号
+    deduped.sort(key=lambda x: (x.trade_date, x.priority.value, x.confidence), reverse=True)
 
     # 3. 截断：每个策略类型最多保留3个最新信号，总体最多30个
     type_counts: dict[str, int] = {}
@@ -69,8 +69,6 @@ def _post_process_signals(signals: list[StrategySignal]) -> list[StrategySignal]
         type_counts[type_key] = type_counts.get(type_key, 0) + 1
         filtered.append(s)
 
-    # 最终按日期降序输出（用户看时间线最自然）
-    filtered.sort(key=lambda x: x.trade_date, reverse=True)
     return filtered
 
 
@@ -98,6 +96,7 @@ def detect_all_strategies(ts_code: str, days: int = 120) -> list[StrategySignal]
     from ..indicators import (
         precompute_kdj_sequence,
         precompute_bbi_sequence,
+        precompute_macd_sequence,
         calculate_macd,
         detect_didi,
         detect_macd_trap,
@@ -110,14 +109,14 @@ def detect_all_strategies(ts_code: str, days: int = 120) -> list[StrategySignal]
 
     kdj_sequence = precompute_kdj_sequence(daily_klines)
     bbi_sequence = precompute_bbi_sequence(daily_klines)
-    dif_list, _, _ = calculate_macd(daily_klines)
+    # 等长 DIF 序列（预热期为 0），下标与 daily_klines 一一对应
+    dif_sequence, _, _ = precompute_macd_sequence(daily_klines)
 
     # 一次性预计算所有指标并挂载到 DailyData 属性上，消除策略循环检测内的重复计算开销
-    dif_len = len(dif_list) if dif_list else 0
     for idx, k in enumerate(daily_klines):
         k.kdj_k, k.kdj_d, k.kdj_j = kdj_sequence[idx]
         k.bbi = bbi_sequence[idx]
-        k.macd_dif = dif_list[idx] if idx < dif_len else 0.0
+        k.macd_dif = dif_sequence[idx]
 
     # 遍历每一天检测战法
     from ..indicators import detect_kirin_stage
@@ -261,7 +260,7 @@ def detect_all_strategies(ts_code: str, days: int = 120) -> list[StrategySignal]
                     StrategySignal(
                         ts_code=ts_code,
                         trade_date=daily_klines[-1].trade_date,
-                        strategy=StrategyType.B1,
+                        strategy=StrategyType.MACD_DEAD_TRAP,
                         action=Action.BUY.value,
                         confidence=0.85,
                         description="MACD 死叉多：眼看死叉未成，白线拐头向上，空中加油",
@@ -327,7 +326,7 @@ def detect_all_strategies(ts_code: str, days: int = 120) -> list[StrategySignal]
                 StrategySignal(
                     ts_code=ts_code,
                     trade_date=daily_klines[-1].trade_date,
-                    strategy=StrategyType.B2,
+                    strategy=StrategyType.YUEYUE,
                     action=Action.BUY.value,
                     confidence=ready["confidence"],
                     description=ready["desc"],
@@ -336,20 +335,25 @@ def detect_all_strategies(ts_code: str, days: int = 120) -> list[StrategySignal]
                 )
             )
 
-        # 关键K
+        # 关键K（key-candles.md：向下关键K=出货对应S1；向上关键K是B1的确认信号，缩量回调到B1才是好买点）
         key_k = detect_key_candle(daily_klines)
         if key_k.get("is_key"):
-            sig_type = StrategyType.S1 if "阴破位" in key_k.get("type", "") else StrategyType.B1
+            key_desc = f"关键K：{key_k['type']} - {key_k['direction']}"
+            if "阴" in key_k.get("type", ""):
+                sig_type, action = StrategyType.S1, Action.SELL
+            else:
+                sig_type, action = StrategyType.KEY_CANDLE, Action.WATCH
+                key_desc += "，等缩量回调到B1再确认"
             signals.append(
                 StrategySignal(
                     ts_code=ts_code,
                     trade_date=daily_klines[-1].trade_date,
                     strategy=sig_type,
-                    action=Action.SELL.value if sig_type == StrategyType.S1 else Action.BUY.value,
+                    action=action.value,
                     confidence=key_k["confidence"],
-                    description=f"关键K：{key_k['type']} - {key_k['direction']}",
+                    description=key_desc,
                     price=daily_klines[-1].close,
-                    reason=f"关键K：{key_k['type']} - {key_k['direction']}",
+                    reason=key_desc,
                 )
             )
 
@@ -360,7 +364,7 @@ def detect_all_strategies(ts_code: str, days: int = 120) -> list[StrategySignal]
         if wave["wave"] != "未知" and wave["confidence"] >= 0.5:
             wave_map = {
                 "建仓波": (
-                    StrategyType.B1,
+                    StrategyType.WAVE_BUILD,
                     Action.BUY,
                     f"三波理论·建仓波：{wave['stats']['gain_pct']}% 涨幅，B1可干",
                 ),
@@ -386,7 +390,7 @@ def detect_all_strategies(ts_code: str, days: int = 120) -> list[StrategySignal]
                         confidence=wave["confidence"],
                         description=desc,
                         details={"price": daily_klines[-1].close},
-                        priority=Priority.OPPORTUNITY if st in (StrategyType.B1, StrategyType.B2) else Priority.OBSERVE,
+                        priority=Priority.OPPORTUNITY if act == Action.BUY else Priority.OBSERVE,
                     )
                 )
 

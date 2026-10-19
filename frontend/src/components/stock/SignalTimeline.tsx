@@ -64,10 +64,14 @@ export default function SignalTimeline({ signals }: Props) {
                         <span className="text-xs text-text-secondary font-medium">{sig.action}</span>
                       </div>
                       <div className="text-xs text-text-secondary leading-relaxed">{sig.description}</div>
-                      {sig.target_price && (
+                      {(sig.target_price != null || sig.stop_loss != null) && (
                         <div className="text-xs text-text-muted mt-1 font-mono">
-                          目标: {sig.target_price.toFixed(2)}
-                          {sig.stop_loss && ` | 止损: ${sig.stop_loss.toFixed(2)}`}
+                          {[
+                            sig.target_price != null && `目标: ${sig.target_price.toFixed(2)}`,
+                            sig.stop_loss != null && `止损: ${sig.stop_loss.toFixed(2)}`,
+                          ]
+                            .filter(Boolean)
+                            .join(' | ')}
                         </div>
                       )}
                     </div>

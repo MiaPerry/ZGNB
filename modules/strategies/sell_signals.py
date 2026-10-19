@@ -64,7 +64,7 @@ def detect_s1(klines: list[DailyData], index: int, kirin_context: dict | None = 
         from ..indicators import detect_chuhuo_wushi
 
         chuhuo = detect_chuhuo_wushi(klines[: index + 1])
-        chuhuo_score = chuhuo.get("total_score", 0)
+        chuhuo_score = len(chuhuo.get("patterns", []))
         if chuhuo_score >= 2:
             confidence += 0.25
             mdc_details.append(f"共振触发五式出货({chuhuo_score}项)")
@@ -145,7 +145,7 @@ def detect_s2(klines: list[DailyData] | None, index: int, dif_list: list[float] 
             from ..indicators import detect_chuhuo_wushi
 
             chuhuo = detect_chuhuo_wushi(klines[: index + 1])
-            chuhuo_score = chuhuo.get("total_score", 0)
+            chuhuo_score = len(chuhuo.get("patterns", []))
             if chuhuo_score >= 2:
                 confidence += 0.15
                 mdc_details.append(f"共振触发五式出货({chuhuo_score}项)")
@@ -222,7 +222,7 @@ def detect_s3(klines: list[DailyData], index: int) -> StrategySignal | None:
         from ..indicators import detect_chuhuo_wushi
 
         chuhuo = detect_chuhuo_wushi(klines[: index + 1])
-        chuhuo_score = chuhuo.get("total_score", 0)
+        chuhuo_score = len(chuhuo.get("patterns", []))
         if chuhuo_score >= 2:
             confidence += 0.15
             mdc_details.append(f"共振触发五式出货({chuhuo_score}项)")

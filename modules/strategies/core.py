@@ -67,6 +67,12 @@ class StrategyType(Enum):
     BRICK_REDUCE = "四块砖减仓"  # 红砖满4块 → 减仓一半
     BRICK_BOUNCE = "四块砖反弹"  # 绿砖满4块 → 可能止跌，观察B1
 
+    # 判断依据/独立战法（不是经典 B1/B2 买点，单独标注来源）
+    KEY_CANDLE = "关键K"  # 向上关键K：等缩量回调到B1再确认
+    MACD_DEAD_TRAP = "死叉多"  # MACD 死叉未成、白线拐头向上
+    YUEYUE = "跃跃欲试"  # 横盘多次放巨量
+    WAVE_BUILD = "建仓波"  # 三波理论·建仓波
+
 
 class Priority(Enum):
     """信号优先级"""
@@ -258,9 +264,10 @@ def _get_macd_dif(klines: list[DailyData], index: int) -> float:
     today = klines[index]
     if getattr(today, "macd_dif", None) is not None:
         return today.macd_dif or 0.0
-    from ..indicators import calculate_macd
+    from ..indicators import precompute_macd_sequence
 
-    difs, _, _ = calculate_macd(klines[: index + 1])
-    for i in range(len(difs)):
-        klines[i].macd_dif = difs[i]
+    # 等长序列按原下标挂载；calculate_macd 返回的是裁掉预热期的序列，不能按下标对齐
+    difs, _, _ = precompute_macd_sequence(klines[: index + 1])
+    for i, dif in enumerate(difs):
+        klines[i].macd_dif = dif
     return today.macd_dif or 0.0

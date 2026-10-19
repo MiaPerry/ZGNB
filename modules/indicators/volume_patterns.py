@@ -178,9 +178,8 @@ def detect_trade_signal(klines: list[DailyData], *, context=None) -> TradeSignal
     if dif_list and dea_list:
         macd_signals = detect_macd_signals(klines, dif_list, dea_list, macd_list)
 
-    # === 一票否决权：MACD 说不能买 → 绝对不买 ===
-    if macd_signals.get("macd_veto", False):
-        return TradeSignal.WATCH
+    # === 一票否决权：MACD 说不能买 → 绝对不买（只否决买入，卖出检测照常执行）===
+    macd_veto = macd_signals.get("macd_veto", False)
 
     if macd_signals.get("is_gold_fake", False):
         return TradeSignal.S1
@@ -196,6 +195,9 @@ def detect_trade_signal(klines: list[DailyData], *, context=None) -> TradeSignal
 
     if macd_signals.get("is_top_divergence", False):
         return TradeSignal.S2
+
+    if macd_veto:
+        return TradeSignal.WATCH
 
     if macd_signals.get("is_bottom_divergence", False):
         return TradeSignal.B1

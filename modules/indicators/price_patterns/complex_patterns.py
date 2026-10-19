@@ -25,6 +25,8 @@ def detect_divergence(klines: list[DailyData], dif_list: list[float]) -> dict:
 
     closes = [k.close for k in klines]
     today_close = closes[-1]
+    # dif_list 可能是裁掉预热期的尾部对齐序列（calculate_macd），窗口下标需换算到 DIF 序列上
+    dif_offset = len(closes) - len(dif_list)
 
     # ====== 顶背离检测 ======
     # 找最近60天内的最高收盘价窗口（排除最后5天，避免与当前比较）
@@ -37,8 +39,8 @@ def detect_divergence(klines: list[DailyData], dif_list: list[float]) -> dict:
         max_close = max(closes[window_start:window_end])
 
         # 对应窗口的DIF最大值
-        dif_window_start = max(0, window_start)
-        dif_window_end = min(len(dif_list), window_end)
+        dif_window_start = max(0, window_start - dif_offset)
+        dif_window_end = min(len(dif_list), window_end - dif_offset)
         if dif_window_end > dif_window_start:
             max_dif = max(dif_list[dif_window_start:dif_window_end])
 
@@ -53,8 +55,8 @@ def detect_divergence(klines: list[DailyData], dif_list: list[float]) -> dict:
     if window_end > window_start:
         min_close = min(closes[window_start:window_end])
 
-        dif_window_start = max(0, window_start)
-        dif_window_end = min(len(dif_list), window_end)
+        dif_window_start = max(0, window_start - dif_offset)
+        dif_window_end = min(len(dif_list), window_end - dif_offset)
         if dif_window_end > dif_window_start:
             min_dif = min(dif_list[dif_window_start:dif_window_end])
 
@@ -568,14 +570,12 @@ def detect_yueyueyushi(klines: list[DailyData]) -> dict:
     if amplitude > 0.15:
         return {"is_ready": False}
 
-    # 计算近10日均量
-    vols_10 = [k.vol for k in klines[-10:]]
-    avg_vol_10 = sum(vols_10) / len(vols_10)
-
-    # 统计巨量次数（量 > 前10日均量 × 2）
+    # 统计巨量次数（量 > 该日之前10日均量 × 2）
     juliang_count = 0
     yang_count = 0
-    for k in recent_20:
+    for i in range(len(klines) - 20, len(klines)):
+        k = klines[i]
+        avg_vol_10 = sum(p.vol for p in klines[i - 10 : i]) / 10
         if k.vol > avg_vol_10 * 2:
             juliang_count += 1
             if k.close > k.open:

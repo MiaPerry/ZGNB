@@ -244,10 +244,15 @@ def detect_four_brick_system(klines: list[DailyData]) -> dict:
     if current_color == -1 and len(colors) >= 2:
         prev_color = colors[-2] if len(colors) >= 2 else 1
         if prev_color == 1:
-            # 刚翻绿
+            # 刚翻绿：count 是当前绿砖数（恒为1），文案要报翻绿前的连续红砖数
+            red_count = 0
+            for color in reversed(colors[:-1]):
+                if color != 1:
+                    break
+                red_count += 1
             result["is_brick_flip_green"] = True
             result["brick_action"] = "止损"
-            result["brick_action_desc"] = f"红砖翻绿！立刻止损（连续红砖{count}块后翻绿）"
+            result["brick_action_desc"] = f"红砖翻绿！立刻止损（连续红砖{red_count}块后翻绿）"
             return result
 
     # 2. 红砖数满4块 → 减仓（连续上涨）

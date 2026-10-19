@@ -337,15 +337,7 @@ def get_kline_chart_data(ts_code: str, days: int = 120) -> dict[str, Any]:
     signal_markers = []
     try:
         signals = detect_all_strategies(ts_code, days=days)
-        date_set = set(dates)
-        for s in signals[:30]:  # 最多取 30 个信号
-            if s.trade_date in date_set:
-                signal_markers.append({
-                    "date": s.trade_date,
-                    "type": s.strategy.value,
-                    "price": s.price or 0,
-                    "action": s.action,
-                })
+        signal_markers = _build_signal_markers(signals, dates, closes)
     except Exception:
         logger.warning("信号标注获取失败: %s", ts_code, exc_info=True)
 
@@ -381,6 +373,21 @@ def get_score(ts_code: str) -> dict:
 
 
 # ── 内部辅助 ──
+
+def _build_signal_markers(signals, dates: list[str], closes: list[float]) -> list[dict]:
+    """信号标注：信号未带价格时回退到当日收盘价，避免标记画在 0 元处"""
+    close_by_date = dict(zip(dates, closes))
+    markers = []
+    for s in signals[:30]:  # 最多取 30 个信号
+        if s.trade_date in close_by_date:
+            markers.append({
+                "date": s.trade_date,
+                "type": s.strategy.value,
+                "price": s.price or close_by_date[s.trade_date],
+                "action": s.action,
+            })
+    return markers
+
 
 def _get_stock_name(ts_code: str) -> str:
     try:

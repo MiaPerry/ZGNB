@@ -113,8 +113,10 @@ def _calculate_position_ratio(klines: list[DailyData]) -> dict:
     }
 
 
-def _is_white_above_yellow(klines: list[DailyData]) -> bool:
-    """白线是否在黄线之上"""
+def _is_white_above_yellow(klines: list[DailyData]) -> bool | None:
+    """白线是否在黄线之上；黄线需 114 根，数据不足返回 None（未知）"""
+    if len(klines) < 114:
+        return None
     try:
         white = calculate_zg_white(klines)
         yellow = calculate_dg_yellow(klines)
@@ -193,7 +195,7 @@ def detect_kirin_stage(klines: list[DailyData]) -> dict:
             'red_green_ratio': float,
             'n_shape': bool,
             'healthy_breathing': bool,
-            'white_above_yellow': bool,
+            'white_above_yellow': bool | None,  # None = 黄线数据不足
             'pull_speed': float,
             'limit_up_count': int,
         },
@@ -328,7 +330,7 @@ def detect_kirin_stage(klines: list[DailyData]) -> dict:
     # 出货信号
     try:
         chuhuo = detect_chuhuo_wushi(klines)
-        if chuhuo.get("total_score", 0) >= 2:
+        if len(chuhuo.get("patterns", [])) >= 2:
             paifa_score += 30
     except Exception:
         pass
@@ -347,8 +349,8 @@ def detect_kirin_stage(klines: list[DailyData]) -> dict:
     recent_red = sum(1 for k in klines[-10:] if k.close > k.open)
     if recent_red < 3:
         luoluo_score += 20
-    # 白线跌破黄线
-    if not white_above:
+    # 白线跌破黄线（数据不足时不加分）
+    if white_above is False:
         luoluo_score += 15
     # 无涨停
     if not has_limit_up:
