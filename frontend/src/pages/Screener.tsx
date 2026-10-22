@@ -8,26 +8,32 @@ import LoadingSpinner from '../components/ui/LoadingSpinner';
 import ApiErrorState from '../components/ui/ApiErrorState';
 import { STRATEGIES } from '../lib/constants';
 import { formatNumber } from '../lib/formatters';
+import { useAppStore } from '../stores/appStore';
+import type { WorkspaceMarket } from '../stores/appStore';
+import { screenQueryOptions } from '../lib/syncLinkage';
 
 export default function Screener() {
   const navigate = useNavigate();
+  const market = useAppStore((s) => s.currentMarket);
+  const initialized = useAppStore((s) => s.marketInitialized);
   const [selected, setSelected] = useState('B1');
   const [limit, setLimit] = useState(20);
   // 已提交的筛选参数：只有点击“开始筛选”才更新，切换选项不隐式执行
-  const [submitted, setSubmitted] = useState<{ strategy: string; limit: number } | null>(null);
+  const [submitted, setSubmitted] = useState<{ market: WorkspaceMarket; strategy: string; limit: number } | null>(null);
 
   const { data: result, isLoading, isFetching, isError, error, refetch } = useQuery({
-    queryKey: ['screen', submitted?.strategy, submitted?.limit],
-    queryFn: () => runScreen(submitted!.strategy, submitted!.limit),
+    ...screenQueryOptions(market, submitted, (request, signal) =>
+      runScreen(request.market, request.strategy, request.limit, signal)),
     // 运行后才启用：同步完成的联动只会重跑已执行过的筛选，不会隐式启动
-    enabled: submitted !== null,
+    enabled: initialized && submitted?.market === market,
     // 重任务：仅在手动执行或数据更新联动时重跑，窗口聚焦/重连不触发
     staleTime: Infinity,
   });
 
-  const ran = submitted !== null;
+  const ran = submitted?.market === market;
   const handleRun = () => {
-    setSubmitted({ strategy: selected, limit });
+    if (!initialized) return;
+    setSubmitted({ market, strategy: selected, limit });
   };
 
   return (

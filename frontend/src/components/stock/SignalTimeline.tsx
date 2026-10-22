@@ -3,9 +3,10 @@ import { SIGNAL_COLORS } from '../../lib/constants';
 
 interface Props {
   signals: StrategySignal[];
+  priceUnit: string;
 }
 
-export default function SignalTimeline({ signals }: Props) {
+export default function SignalTimeline({ signals, priceUnit }: Props) {
   if (!signals || signals.length === 0) {
     return <div className="text-sm text-text-muted text-center py-8">暂无信号</div>;
   }
@@ -67,8 +68,8 @@ export default function SignalTimeline({ signals }: Props) {
                       {(sig.target_price != null || sig.stop_loss != null) && (
                         <div className="text-xs text-text-muted mt-1 font-mono">
                           {[
-                            sig.target_price != null && `目标: ${sig.target_price.toFixed(2)}`,
-                            sig.stop_loss != null && `止损: ${sig.stop_loss.toFixed(2)}`,
+                            sig.target_price != null && `目标: ${sig.target_price.toFixed(2)} ${priceUnit}`,
+                            sig.stop_loss != null && `止损: ${sig.stop_loss.toFixed(2)} ${priceUnit}`,
                           ]
                             .filter(Boolean)
                             .join(' | ')}

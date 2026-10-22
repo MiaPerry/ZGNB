@@ -28,8 +28,11 @@ def api_env(temp_db, db_conn, tmp_path, monkeypatch):
 
     from api.main import app
 
-    client = TestClient(app)
-    return client, service, syncer, db_conn
+    try:
+        with TestClient(app) as client:
+            yield client, service, syncer, db_conn
+    finally:
+        service._executor.shutdown(wait=True)
 
 
 def test_status_idle_before_any_task(api_env):
@@ -39,6 +42,7 @@ def test_status_idle_before_any_task(api_env):
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "idle"
+    assert body["workspace_market"] == "US"
     assert body["task_id"] is None
 
 
@@ -56,10 +60,12 @@ def test_submit_returns_snapshot_quickly_and_completes(api_env):
     body = resp.json()
     assert body["status"] == "running"
     assert body["task_id"]
+    assert body["workspace_market"] == "US"
 
     assert service.wait_for_completion(timeout=10)
     final = client.get("/api/v1/system/sync/batch/status").json()
     assert final["status"] == "completed"
+    assert final["workspace_market"] == "US"
     assert final["success"] == 1
     assert final["new_rows"] == 2
 
@@ -122,9 +128,69 @@ def test_data_status_is_read_only_and_reports_gaps(api_env):
     assert conn.execute('SELECT COUNT(*) FROM sync_log').fetchone()[0] == before
 
 
+def test_cn_batch_api_submits_and_reports_bound_market(temp_db, tmp_path, monkeypatch):
+    from api.main import app
+    from api.routes import system
+    from api.services.sync_service import USStockSyncService
+    from modules.data_sync import register_cn_assets
+    from modules.database import get_connection, init_database, market_context
+    from tests.test_us_sync_service import FakeSyncer, FIXED_NOW
+
+    init_database("CN")
+    with market_context("CN"), get_connection() as conn:
+        register_cn_assets(conn, [{"ts_code": "600519.SH", "name": "贵州茅台", "market": "主板",
+                                   "asset_type": "stock", "currency": "CNY", "sources": ["manual"]}])
+    syncer = FakeSyncer(outcomes={"600519.SH": [1]})
+    service = USStockSyncService(market="CN", syncer=syncer, now_provider=lambda: FIXED_NOW,
+                                 backup_dir=tmp_path / "backups")
+    monkeypatch.setattr(system, "get_a_share_sync_service", lambda: service)
+    try:
+        with TestClient(app) as client:
+            submitted = client.post("/api/v1/system/sync/batch", headers={"X-Market": "CN"})
+            assert service.wait_for_completion(10)
+            response = client.get("/api/v1/system/sync/batch/status", headers={"X-Market": "CN"})
+        assert submitted.status_code == 200 and submitted.json()["workspace_market"] == "CN"
+        assert response.status_code == 200
+        assert response.json()["workspace_market"] == "CN" and response.json()["success"] == 1
+    finally:
+        service._executor.shutdown(wait=True)
+
+
+def test_single_cn_sync_api_routes_to_workspace_adapter(temp_db, monkeypatch):
+    from api.main import app
+    from api.services import sync_service
+    from modules.database import init_database
+
+    init_database("CN")
+    calls = []
+
+    def sync(code, *, days, indicators, lease):
+        calls.append((code, days, indicators, lease.binding.market))
+        return 2
+
+    monkeypatch.setattr(sync_service, "sync_workspace_stock", sync)
+    with TestClient(app) as client:
+        response = client.post("/api/v1/system/sync/600519.SH?days=30&indicators=true",
+                               headers={"X-Market": "CN"})
+    assert response.status_code == 200
+    assert calls == [("600519.SH", 30, True, "CN")]
+
+
 def test_existing_sync_log_endpoint_unchanged(api_env):
     """既有 /sync/status 日志接口返回结构保持不变"""
     client, *_ = api_env
     resp = client.get("/api/v1/system/sync/status")
     assert resp.status_code == 200
     assert "logs" in resp.json()
+    assert resp.json()["workspace_market"] == "US"
+
+
+def test_cn_sync_log_status_exposes_bound_market(temp_db):
+    from api.main import app
+    from modules.database import init_database
+
+    init_database("CN")
+    with TestClient(app) as client:
+        response = client.get("/api/v1/system/sync/status", headers={"X-Market": "CN"})
+    assert response.status_code == 200
+    assert response.json()["workspace_market"] == "CN"

@@ -1,15 +1,24 @@
 import ReactECharts from 'echarts-for-react';
 import type { KlineChart as KlineDataType } from '../../api/types';
 import { SIGNAL_COLORS } from '../../lib/constants';
-import { formatVolumeAxis, formatNumber } from '../../lib/formatters';
+import { assetPriceUnit, formatVolumeAxis, formatNumber } from '../../lib/formatters';
+import type { WorkspaceMarket } from '../../stores/appStore';
 
 interface Props {
   data: KlineDataType;
+  market: WorkspaceMarket;
   height?: number;
 }
 
-export default function KlineChart({ data, height = 820 }: Props) {
+export default function KlineChart({ data, market, height = 820 }: Props) {
   const { dates, ohlc, volumes, pct_chgs, overlays, signal_markers, kdj, macd, brick } = data;
+  const priceUnit = assetPriceUnit(market, data.ts_code, data.asset_type, data.currency);
+  const priceTooltip = {
+    valueFormatter: (value: number | string | (number | string)[]) => {
+      const format = (item: number | string) => typeof item === 'number' ? `${formatNumber(item)} ${priceUnit}` : item;
+      return Array.isArray(value) ? value.map(format).join(' / ') : format(value);
+    },
+  };
 
   const upColor = '#ef4444';
   const downColor = '#22c55e';
@@ -64,7 +73,7 @@ export default function KlineChart({ data, height = 820 }: Props) {
       itemHeight: 2,
     },
     grid: [
-      { left: 60, right: 70, top: 30, height: '34%' },
+      { left: 60, right: 100, top: 30, height: '34%' },
       { left: 60, right: 20, top: '38%', height: '11%' },
       { left: 60, right: 20, top: '53%', height: '13%' },
       { left: 60, right: 20, top: '69%', height: '13%' },
@@ -116,6 +125,8 @@ export default function KlineChart({ data, height = 820 }: Props) {
       {
         scale: true,
         gridIndex: 0,
+        name: priceUnit,
+        nameTextStyle: { color: '#64748b', fontSize: 10 },
         splitLine: { lineStyle: { color: '#1e293b' } },
         axisLabel: { color: '#64748b', fontSize: 10 },
         axisLine: { lineStyle: { color: '#2a3a52' } },
@@ -161,6 +172,7 @@ export default function KlineChart({ data, height = 820 }: Props) {
     series: [
       {
         name: 'K线',
+        tooltip: priceTooltip,
         type: 'candlestick',
         data: ohlc,
         xAxisIndex: 0,
@@ -194,6 +206,7 @@ export default function KlineChart({ data, height = 820 }: Props) {
       // 白线 (EMA(EMA(C,10),10)) - 短期动能线
       {
         name: '白线',
+        tooltip: priceTooltip,
         type: 'line',
         data: overlays.white_line,
         xAxisIndex: 0,
@@ -204,11 +217,11 @@ export default function KlineChart({ data, height = 820 }: Props) {
         // 右侧点位标签
         markPoint: lastWhite !== null ? {
           symbol: 'roundRect',
-          symbolSize: [44, 18],
-          symbolOffset: [28, 0],
+          symbolSize: [76, 18],
+          symbolOffset: [44, 0],
           data: [{
             coord: [lastDate, lastWhite],
-            value: formatNumber(lastWhite),
+            value: `${formatNumber(lastWhite)} ${priceUnit}`,
             itemStyle: { color: '#0b0f19', borderColor: '#ffffff', borderWidth: 1 },
             label: { color: '#ffffff', fontSize: 10, fontWeight: 'bold' },
           }],
@@ -217,6 +230,7 @@ export default function KlineChart({ data, height = 820 }: Props) {
       // 黄线 ((MA14+MA28+MA57+MA114)/4) - 多空生命线
       {
         name: '黄线',
+        tooltip: priceTooltip,
         type: 'line',
         data: overlays.yellow_line,
         xAxisIndex: 0,
@@ -226,11 +240,11 @@ export default function KlineChart({ data, height = 820 }: Props) {
         symbol: 'none',
         markPoint: lastYellow !== null ? {
           symbol: 'roundRect',
-          symbolSize: [44, 18],
-          symbolOffset: [28, 0],
+          symbolSize: [76, 18],
+          symbolOffset: [44, 0],
           data: [{
             coord: [lastDate, lastYellow],
-            value: formatNumber(lastYellow),
+            value: `${formatNumber(lastYellow)} ${priceUnit}`,
             itemStyle: { color: '#0b0f19', borderColor: '#fbbf24', borderWidth: 1 },
             label: { color: '#fbbf24', fontSize: 10, fontWeight: 'bold' },
           }],
@@ -239,6 +253,7 @@ export default function KlineChart({ data, height = 820 }: Props) {
       // BBI 多空指数
       {
         name: 'BBI',
+        tooltip: priceTooltip,
         type: 'line',
         data: overlays.bbi,
         xAxisIndex: 0,
@@ -248,11 +263,11 @@ export default function KlineChart({ data, height = 820 }: Props) {
         symbol: 'none',
         markPoint: lastBbi !== null ? {
           symbol: 'roundRect',
-          symbolSize: [44, 18],
-          symbolOffset: [28, 0],
+          symbolSize: [76, 18],
+          symbolOffset: [44, 0],
           data: [{
             coord: [lastDate, lastBbi],
-            value: formatNumber(lastBbi),
+            value: `${formatNumber(lastBbi)} ${priceUnit}`,
             itemStyle: { color: '#0b0f19', borderColor: '#06b6d4', borderWidth: 1 },
             label: { color: '#06b6d4', fontSize: 10, fontWeight: 'bold' },
           }],
@@ -261,6 +276,7 @@ export default function KlineChart({ data, height = 820 }: Props) {
       // 布林上轨
       {
         name: '布林上',
+        tooltip: priceTooltip,
         type: 'line',
         data: overlays.boll_upper,
         xAxisIndex: 0,
@@ -272,6 +288,7 @@ export default function KlineChart({ data, height = 820 }: Props) {
       // 布林中轨
       {
         name: '布林中',
+        tooltip: priceTooltip,
         type: 'line',
         data: overlays.boll_mid,
         xAxisIndex: 0,
@@ -283,6 +300,7 @@ export default function KlineChart({ data, height = 820 }: Props) {
       // 布林下轨
       {
         name: '布林下',
+        tooltip: priceTooltip,
         type: 'line',
         data: overlays.boll_lower,
         xAxisIndex: 0,
@@ -293,7 +311,7 @@ export default function KlineChart({ data, height = 820 }: Props) {
       },
       // 成交量
       {
-        name: '成交量',
+        name: data.asset_type === 'index' ? '成交量（源数据）' : '成交量（股）',
         type: 'bar',
         data: volumes.map((v, i) => ({
           value: v,

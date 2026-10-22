@@ -1,4 +1,5 @@
-import api from './client';
+import api, { marketRequest } from './client.ts';
+import type { WorkspaceMarket } from '../stores/appStore.ts';
 
 /** 与后端 BatchSyncSnapshot 对应的任务快照 */
 export interface BatchSyncFailure {
@@ -33,13 +34,13 @@ export interface BatchSyncSnapshot {
   finished_at: string | null;
 }
 
-export async function fetchBatchSyncStatus(): Promise<BatchSyncSnapshot> {
-  const { data } = await api.get<BatchSyncSnapshot>('/system/sync/batch/status');
+export async function fetchBatchSyncStatus(market: WorkspaceMarket, signal?: AbortSignal): Promise<BatchSyncSnapshot> {
+  const { data } = await api.get<BatchSyncSnapshot>('/system/sync/batch/status', marketRequest(market, signal));
   return data;
 }
 
-export async function startBatchSync(): Promise<BatchSyncSnapshot> {
-  const { data } = await api.post<BatchSyncSnapshot>('/system/sync/batch');
+export async function startBatchSync(market: WorkspaceMarket, signal?: AbortSignal): Promise<BatchSyncSnapshot> {
+  const { data } = await api.post<BatchSyncSnapshot>('/system/sync/batch', null, marketRequest(market, signal));
   return data;
 }
 
@@ -63,7 +64,7 @@ export interface DataStatusResponse {
   markets: Record<string, MarketSyncInfo>;
 }
 
-export async function fetchDataStatus(): Promise<DataStatusResponse> {
-  const { data } = await api.get<DataStatusResponse>('/system/data/status');
+export async function fetchDataStatus(market: WorkspaceMarket, signal?: AbortSignal): Promise<DataStatusResponse> {
+  const { data } = await api.get<DataStatusResponse>('/system/data/status', marketRequest(market, signal));
   return data;
 }

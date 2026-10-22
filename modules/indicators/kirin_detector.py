@@ -5,7 +5,7 @@
 核心：吸 → 拉 → 派 → 落 四阶段状态机
 """
 
-from .core import DailyData
+from .core import LIMIT_UP_UNKNOWN_REASON, DailyData, limit_up_unknown
 from .price_patterns import calculate_zg_white, calculate_dg_yellow
 from .volume_patterns import detect_chuhuo_wushi
 
@@ -149,7 +149,7 @@ def _detect_volume_price_rise(klines: list[DailyData]) -> bool:
 
 
 def _get_limit_up_threshold(klines: list[DailyData]) -> float:
-    """根据市场获取涨停阈值：A股9.9%，美股5%"""
+    """根据市场获取涨停阈值：美股5%，其他市场9.9%（A股由 _count_limit_up 判为未知）"""
     if klines and klines[0].ts_code.endswith(".US"):
         return 5.0
     return 9.9
@@ -162,8 +162,10 @@ def _has_limit_up(klines: list[DailyData], days: int = 20) -> bool:
     return any(k.pct_chg >= threshold for k in segment)
 
 
-def _count_limit_up(klines: list[DailyData], days: int = 20) -> int:
-    """最近 days 日涨停/大涨次数"""
+def _count_limit_up(klines: list[DailyData], days: int = 20) -> int | None:
+    """最近 days 日涨停/大涨次数；A股缺源端限价时返回 None（不可判定）"""
+    if klines and limit_up_unknown(klines[0].ts_code):
+        return None
     segment = klines[-days:] if len(klines) >= days else klines
     threshold = _get_limit_up_threshold(klines)
     return sum(1 for k in segment if k.pct_chg >= threshold)
@@ -197,7 +199,7 @@ def detect_kirin_stage(klines: list[DailyData]) -> dict:
             'healthy_breathing': bool,
             'white_above_yellow': bool | None,  # None = 黄线数据不足
             'pull_speed': float,
-            'limit_up_count': int,
+            'limit_up_count': int | None,  # None = 不可判定，附 limit_up_unknown_reason
         },
         'operation': str,  # 关注等B1 / 不追等回调 / 准备走人 / 不抄底 / 观望
     }
@@ -223,7 +225,8 @@ def detect_kirin_stage(klines: list[DailyData]) -> dict:
     pull_speed = _calculate_pull_speed(klines)
     vol_price_rise = _detect_volume_price_rise(klines)
     limit_up_count = _count_limit_up(klines, days=20)
-    has_limit_up = limit_up_count > 0
+    limit_known = limit_up_count is not None
+    has_limit_up = limit_known and limit_up_count > 0
 
     # 60 日均量
     avg_vol_60 = _calculate_ma([k.vol for k in klines], 60)
@@ -261,6 +264,8 @@ def detect_kirin_stage(klines: list[DailyData]) -> dict:
         "from_low_pct": round(from_low_pct, 1),
         "from_high_pct": round(from_high_pct, 1),
     }
+    if not limit_known:
+        indicators["limit_up_unknown_reason"] = LIMIT_UP_UNKNOWN_REASON
     result["indicators"] = indicators
 
     # ========== 吸筹阶段评分 ==========
@@ -281,8 +286,8 @@ def detect_kirin_stage(klines: list[DailyData]) -> dict:
         xishou_score += 20
     elif red_green > 1.0:
         xishou_score += 10
-    # 无涨停（吸筹期一般不拉涨停）
-    if not has_limit_up:
+    # 无涨停（吸筹期一般不拉涨停；未知时不加分）
+    if limit_known and not has_limit_up:
         xishou_score += 10
 
     # ========== 拉升阶段评分 ==========
@@ -298,7 +303,7 @@ def detect_kirin_stage(klines: list[DailyData]) -> dict:
     elif pull_speed > 20:
         lasheng_score += 15
     # 有涨停
-    if limit_up_count >= 2:
+    if limit_known and limit_up_count >= 2:
         lasheng_score += 20
     elif has_limit_up:
         lasheng_score += 10
@@ -353,7 +358,7 @@ def detect_kirin_stage(klines: list[DailyData]) -> dict:
     if white_above is False:
         luoluo_score += 15
     # 无涨停
-    if not has_limit_up:
+    if limit_known and not has_limit_up:
         luoluo_score += 10
 
     scores = {

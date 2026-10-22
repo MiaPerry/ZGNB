@@ -10,6 +10,7 @@ from api.models.trade import (
 )
 from api.models.common import StatusResponse
 from api.services import trade_service
+from modules.database import MarketCodeError
 
 router = APIRouter()
 
@@ -32,6 +33,8 @@ def parse_trade(req: TradeAddRequest):
     """解析口语化交易描述（不保存）"""
     try:
         return trade_service.parse_trade(req.text)
+    except MarketCodeError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"解析失败: {e}")
 
@@ -41,6 +44,8 @@ def add_trade(req: TradeAddRequest):
     """解析并保存交易记录"""
     try:
         return trade_service.add_trade(req.text)
+    except MarketCodeError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"保存失败: {e}")
 

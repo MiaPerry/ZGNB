@@ -24,12 +24,26 @@ test('派生中断状态不被相同修订号的迟到运行态覆盖', () => {
 
 test('轮询采用两秒运行间隔，错误不覆盖已有任务', async () => {
   const client = new QueryClient();
-  const options = importQueryOptions(async () => { throw new Error('offline'); });
+  const options = importQueryOptions(async () => { throw new Error('offline'); }, 'US');
   assert.equal(options.refetchInterval({ state: { data: job('running') } }), 2000);
   assert.equal(options.refetchInterval({ state: { data: job('completed') } }), 30000);
-  client.setQueryData(IMPORT_TASK_KEY, job('running', 3));
+  client.setQueryData(options.queryKey, job('running', 3));
   await assert.rejects(client.fetchQuery({ ...options, retry: false }));
-  assert.equal(client.getQueryData(IMPORT_TASK_KEY).status, 'running');
+  assert.equal(client.getQueryData(options.queryKey).status, 'running');
+  client.clear();
+});
+
+test('导入轮询键绑定市场并透传取消信号，两个市场同任务 ID 不串缓存', async () => {
+  const client = new QueryClient();
+  let signal;
+  const cnOptions = importQueryOptions(async (received) => { signal = received; return job('completed', 8); }, 'CN');
+  assert.deepEqual(cnOptions.queryKey, ['market', 'CN', ...IMPORT_TASK_KEY]);
+  const usOptions = importQueryOptions(async () => job('running', 1), 'US');
+  await client.fetchQuery(cnOptions);
+  await client.fetchQuery(usOptions);
+  assert.ok(signal instanceof AbortSignal);
+  assert.equal(client.getQueryData(cnOptions.queryKey).status, 'completed');
+  assert.equal(client.getQueryData(usOptions.queryKey).status, 'running');
   client.clear();
 });
 
@@ -43,11 +57,11 @@ test('只允许重试失败或中断的终态任务', () => {
 test('查询缓存持有终态，重新打开观察器仍可读取结果', async () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
   const completed = job('completed', 6);
-  const options = { queryKey: IMPORT_TASK_KEY, queryFn: async () => completed, structuralSharing: mergeImportSnapshot };
+  const options = importQueryOptions(async () => completed, 'US');
   const observer = new QueryObserver(client, options);
   const off = observer.subscribe(() => {});
   await observer.refetch();
-  client.setQueryData(IMPORT_TASK_KEY, (old) => mergeImportSnapshot(old, job('running')));
+  client.setQueryData(options.queryKey, (old) => mergeImportSnapshot(old, job('running')));
   off();
   const reopened = new QueryObserver(client, options);
   assert.equal(reopened.getCurrentResult().data.status, 'completed');

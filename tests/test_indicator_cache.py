@@ -5,6 +5,8 @@
 
 from datetime import datetime, timedelta
 
+import pytest
+
 from modules.indicators import (
     IndicatorResult,
     DailyData,
@@ -111,6 +113,54 @@ def test_batch_brick_history_reuses_daily_values(temp_db, db_conn, monkeypatch):
     assert [tuple(row) for row in actual] == expected
     crosses = db_conn.execute("SELECT is_gold_cross, is_dead_cross FROM indicator_cache ORDER BY trade_date").fetchall()
     assert [tuple(row) for row in crosses] == expected_cross
+
+
+def test_explicit_candidates_publish_only_with_callers_transaction(temp_db, monkeypatch):
+    """候选计算不回读活动库，写入由调用方统一回滚，不提前失效缓存。"""
+    from modules.database import get_connection
+    from modules.indicators import cache_builder, data_layer
+
+    bars = _make_daily_klines("600519.SH", n=12)
+    monkeypatch.setattr(data_layer, "get_kline_data", lambda *a, **k: pytest.fail("候选不得回读活动库"))
+    rows = cache_builder.build_indicator_candidates(bars)
+    assert len(rows) == 12 and rows[-1]["close"] == bars[-1].close
+    with pytest.raises(RuntimeError, match="撤销候选"):
+        with get_connection() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM daily_kline").fetchone()[0] == 0
+            assert cache_builder.persist_indicator_rows(conn, rows) == 12
+            assert conn.in_transaction
+            raise RuntimeError("撤销候选")
+    with get_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM indicator_cache").fetchone()[0] == 0
+
+
+def test_cn_publish_invalidates_only_committed_market_and_stock(temp_db):
+    from modules import data_sync
+    from modules.data_freshness import get_data_version
+    from modules.database import get_connection, get_db_path, init_database, market_context
+    from modules.indicators import data_layer
+    from tests.test_data_sync_extensions import _cn_daily_source
+
+    code = "600519.SH"
+    clear_indicator_memory_cache()
+    us_key = ("US", str(get_db_path("US")), code, "20261020")
+    with market_context("CN"):
+        init_database()
+        key = ("CN", str(get_db_path()), code, "20261020")
+        other = ("CN", str(get_db_path()), "600000.SH", "20261020")
+        for cache_key in (us_key, key, other):
+            data_layer._indicator_memory_cache[cache_key] = _make_indicator_result()
+            data_layer._indicator_cache_versions[cache_key] = "old"
+        with get_connection() as conn:
+            data_sync.register_cn_assets(conn, [{"ts_code": code, "asset_type": "stock", "sources": ["manual"]}])
+        daily, factors = _cn_daily_source(code)
+        try:
+            data_sync.publish_cn_daily_candidate(data_sync.build_cn_daily_candidate(code, daily, factors), get_data_version(code))
+            assert key not in data_layer._indicator_memory_cache
+            assert us_key in data_layer._indicator_memory_cache and other in data_layer._indicator_memory_cache
+            assert us_key in data_layer._indicator_cache_versions and other in data_layer._indicator_cache_versions
+        finally:
+            clear_indicator_memory_cache()
 
 
 def test_incremental_only_builds_missing_rows(db_conn, monkeypatch):
@@ -221,6 +271,25 @@ def test_cache_rechecks_persistent_revision(db_conn):
 
 
 class TestIndicatorCache:
+    @pytest.mark.parametrize("other_market", ["US", "CN"])
+    def test_memory_cache_separates_same_version_database_identities(self, db_conn, tmp_path, monkeypatch, other_market):
+        from modules.database import init_database, market_context
+        from modules.indicators import data_layer
+
+        # 复制库可能保留相同epoch/revision，版本相同也不能共享缓存。
+        monkeypatch.setattr(data_layer, "get_data_version", lambda code: "copied-epoch:1")
+        first = _make_indicator_result()
+        assert _save_indicator_cache(first, _make_daily_klines())
+        with market_context(other_market, tmp_path / "other.db"):
+            init_database()
+            second = _make_indicator_result()
+            second.k = 80
+            assert _save_indicator_cache(second, _make_daily_klines())
+            assert _load_indicator_cache(second.ts_code, second.trade_date).k == 80
+        assert _load_indicator_cache(first.ts_code, first.trade_date).k == 30
+        with market_context(other_market, tmp_path / "other.db"):
+            assert _load_indicator_cache(first.ts_code, first.trade_date).k == 80
+
     def setup_method(self):
         """每个测试方法前清理内存缓存"""
         clear_indicator_memory_cache()
@@ -281,13 +350,15 @@ class TestIndicatorCache:
         _save_indicator_cache(result, klines)
 
         # 确认内存缓存存在
-        assert (result.ts_code, result.trade_date) in _indicator_memory_cache
+        from modules.indicators.data_layer import _indicator_cache_key
+        assert _indicator_cache_key(result.ts_code, result.trade_date) in _indicator_memory_cache
 
         # 清空内存缓存
         clear_indicator_memory_cache()
 
         # 内存缓存应已清空
-        assert (result.ts_code, result.trade_date) not in _indicator_memory_cache
+        from modules.indicators.data_layer import _indicator_cache_key
+        assert _indicator_cache_key(result.ts_code, result.trade_date) not in _indicator_memory_cache
 
         # 仍能从数据库加载
         loaded = _load_indicator_cache(result.ts_code, result.trade_date)
@@ -304,15 +375,17 @@ class TestIndicatorCache:
         clear_indicator_memory_cache()
 
         # 确认内存缓存为空
-        assert (result.ts_code, result.trade_date) not in _indicator_memory_cache
+        from modules.indicators.data_layer import _indicator_cache_key
+        assert _indicator_cache_key(result.ts_code, result.trade_date) not in _indicator_memory_cache
 
         # 从数据库加载
         loaded = _load_indicator_cache(result.ts_code, result.trade_date)
         assert loaded is not None
 
         # 加载后应自动写入内存缓存
-        assert (result.ts_code, result.trade_date) in _indicator_memory_cache
-        assert _indicator_memory_cache[(result.ts_code, result.trade_date)].k == result.k
+        from modules.indicators.data_layer import _indicator_cache_key
+        assert _indicator_cache_key(result.ts_code, result.trade_date) in _indicator_memory_cache
+        assert _indicator_memory_cache[_indicator_cache_key(result.ts_code, result.trade_date)].k == result.k
 
     def test_save_overwrite(self, db_conn):
         """重复保存应覆盖旧数据"""

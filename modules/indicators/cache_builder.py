@@ -86,6 +86,36 @@ def missing_dates(conn, ts_code):
         "WHERE k.ts_code=? AND i.ts_code IS NULL ORDER BY k.trade_date", (ts_code,))]
 
 
+def build_indicator_candidates(klines, *, dates=None):
+    """只根据显式候选K线计算，不连接数据库或改变缓存。"""
+    if not klines:
+        return []
+    identities = [(bar.ts_code, bar.trade_date) for bar in klines]
+    if len({code for code, _ in identities}) != 1 or identities != sorted(set(identities)):
+        raise ValueError("候选K线必须为单标的、日期唯一且升序")
+    context = IndicatorContext(klines)
+    return [context.row(i) for i, bar in enumerate(klines) if dates is None or bar.trade_date in dates]
+
+
+def persist_indicator_rows(conn, rows, *, incremental=False):
+    """仅在调用方事务内写候选指标；不提交、不发布版本、不失效缓存。"""
+    written = 0
+    allowed = {row[1] for row in conn.execute("PRAGMA table_info(indicator_cache)")}
+    for row in rows:
+        columns = list(row)
+        if not columns or not set(columns).issubset(allowed):
+            raise ValueError("候选指标字段无效")
+        conflict = " ON CONFLICT(ts_code, trade_date) DO NOTHING" if incremental else (
+            " ON CONFLICT(ts_code, trade_date) DO UPDATE SET " +
+            ",".join(f"{key}=excluded.{key}" for key in columns if key not in ("ts_code", "trade_date")))
+        cursor = conn.execute(
+            f"INSERT INTO indicator_cache ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})" + conflict,
+            tuple(row.values()),
+        )
+        written += cursor.rowcount
+    return written
+
+
 def write_indicator_rows(ts_code, *, days=None, incremental=True):
     from modules.database import get_connection
     from .data_layer import get_kline_data, clear_indicator_memory_cache
@@ -97,20 +127,9 @@ def write_indicator_rows(ts_code, *, days=None, incremental=True):
     klines = get_kline_data(ts_code, days if days is not None else -1)
     if not klines:
         return 0
-    context = IndicatorContext(klines)
-    rows = [context.row(i) for i, bar in enumerate(klines) if targets is None or bar.trade_date in targets]
-    written = 0
+    rows = build_indicator_candidates(klines, dates=targets)
     with get_connection() as conn:
-        for row in rows:
-            columns = list(row)
-            conflict = " ON CONFLICT(ts_code, trade_date) DO NOTHING" if incremental else (
-                " ON CONFLICT(ts_code, trade_date) DO UPDATE SET " +
-                ",".join(f"{key}=excluded.{key}" for key in columns if key not in ("ts_code", "trade_date")))
-            cursor = conn.execute(
-                f"INSERT INTO indicator_cache ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})" + conflict,
-                tuple(row.values()),
-            )
-            written += cursor.rowcount
+        written = persist_indicator_rows(conn, rows, incremental=incremental)
         if incremental and targets.intersection(missing_dates(conn, ts_code)):
             raise RuntimeError(f"指标缺口未补齐: {ts_code}")
         if written:

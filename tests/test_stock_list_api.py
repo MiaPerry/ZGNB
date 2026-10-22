@@ -38,6 +38,141 @@ def stock_client(db_conn):
         yield client
 
 
+def test_market_header_isolation_and_cn_board_defaults(stock_client, tmp_path, monkeypatch):
+    from modules.database import get_connection, init_database
+
+    monkeypatch.setenv("CN_DB_PATH", str(tmp_path / "cn.db"))
+    init_database("CN")
+    with get_connection("CN") as conn:
+        write_stock_basic(conn, "600519.SH", "贵州茅台", "白酒", "主板")
+        write_stock_basic(conn, "300750.SZ", "宁德时代", "电池", "创业板")
+    response = stock_client.get("/api/v1/stock/list", headers={"X-Market": "CN"})
+    assert response.status_code == 200
+    assert {r["ts_code"] for r in response.json()["items"]} == {"600519.SH", "300750.SZ"}
+    assert {r["market"] for r in response.json()["markets"]} == {"主板", "创业板"}
+    assert stock_client.get("/api/v1/stock/list", headers={"X-Market": "CN"},
+                            params={"market": "主板"}).json()["total"] == 1
+    assert stock_client.get("/api/v1/stock/list", headers={"X-Market": "CN"},
+                            params={"market": "港股"}).status_code == 422
+    assert stock_client.get("/api/v1/stock/list", headers={"X-Market": "HK"}).status_code == 422
+    assert stock_client.get("/api/v1/stock/list").json()["total"] == 4
+
+
+def test_cn_all_stocks_excludes_registered_index(stock_client, tmp_path, monkeypatch):
+    from modules.data_sync import register_cn_assets
+    from modules.database import get_connection, init_database, market_context
+
+    monkeypatch.setenv("CN_DB_PATH", str(tmp_path / "cn.db"))
+    init_database("CN")
+    with market_context("CN"), get_connection() as conn:
+        register_cn_assets(conn, [
+            {"ts_code": "600519.SH", "name": "贵州茅台", "market": "主板", "asset_type": "stock"},
+            {"ts_code": "000300.SH", "name": "沪深300", "market": "指数", "asset_type": "index"},
+        ])
+    data = stock_client.get("/api/v1/stock/list", headers={"X-Market": "CN"}).json()
+    assert [item["ts_code"] for item in data["items"]] == ["600519.SH"]
+
+
+def test_uninitialized_cn_reports_unavailable_without_creating_db(stock_client, tmp_path, monkeypatch):
+    cn = tmp_path / "absent.db"
+    monkeypatch.setenv("CN_DB_PATH", str(cn))
+    response = stock_client.get("/api/v1/stock/list", headers={"X-Market": "CN"})
+    assert response.status_code == 503
+    assert not cn.exists()
+    health = stock_client.get("/api/v1/system/health", headers={"X-Market": "CN"}).json()
+    assert health["workspace_market"] == "CN"
+    assert health["db_exists"] is False
+
+
+def test_wrong_market_codes_rejected_before_analysis_and_writes(stock_client):
+    assert stock_client.get("/api/v1/stock/analyze/600519.SH").status_code == 422
+    assert stock_client.post("/api/v1/backtest/shaofu", json={"ts_code": "600519.SH"}).status_code == 422
+    assert stock_client.put("/api/v1/trade/1", json={"ts_code": "600519.SH"}).status_code == 422
+
+
+@pytest.mark.parametrize("endpoint", ["/api/v1/trade/parse", "/api/v1/trade/"])
+def test_trade_text_rejects_wrong_market_before_save(stock_client, endpoint):
+    import json
+    from modules.database import get_connection
+
+    text = json.dumps({"ts_code": "600519.SH", "trade_date": "2026-10-20",
+                       "action": "buy", "price": 1500, "quantity": 100})
+    response = stock_client.post(endpoint, json={"text": text})
+    assert response.status_code == 422
+    with get_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM trade_records").fetchone()[0] == 0
+
+
+def test_null_trade_code_is_rejected_before_update(stock_client, db_conn):
+    db_conn.execute("INSERT INTO trade_records(ts_code,trade_date,action,price,quantity,amount) "
+                    "VALUES ('AAPL.US','20261020','buy',100,1,100)")
+    db_conn.commit()
+    assert stock_client.put("/api/v1/trade/1", json={"ts_code": None}).status_code == 422
+    assert db_conn.execute("SELECT ts_code FROM trade_records WHERE id=1").fetchone()[0] == "AAPL.US"
+
+
+def test_parallel_requests_and_identical_trade_ids_are_isolated(stock_client, db_conn, monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from api.services import stock_service
+    from modules.database import get_connection, get_market, init_database
+
+    init_database("CN")
+    with get_connection("CN") as conn:
+        write_stock_basic(conn, "600519.SH", "贵州茅台", "白酒", "主板")
+        conn.execute("INSERT INTO trade_records(id,ts_code,trade_date,action,price,quantity,amount) "
+                     "VALUES (1,'600519.SH','20261020','buy',1500,1,1500)")
+    db_conn.execute("INSERT INTO trade_records(id,ts_code,trade_date,action,price,quantity,amount) "
+                    "VALUES (1,'AAPL.US','20261020','buy',100,1,100)")
+    db_conn.commit()
+    barrier = threading.Barrier(2)
+    original = stock_service.list_stocks
+
+    def overlapping(**kwargs):
+        barrier.wait(timeout=10)
+        return original(**kwargs)
+
+    monkeypatch.setattr(stock_service, "list_stocks", overlapping)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(stock_client.get, "/api/v1/stock/list", headers={"X-Market": market})
+                   for market in ("US", "CN")]
+        us, cn = [future.result(timeout=15) for future in futures]
+    assert us.status_code == cn.status_code == 200
+    assert {item["ts_code"] for item in us.json()["items"]} == {"AAPL.US", "MSFT.US", "NVDA.US", "EMPTY.US"}
+    assert [item["ts_code"] for item in cn.json()["items"]] == ["600519.SH"]
+    assert us.headers["X-Market"] == "US" and cn.headers["X-Market"] == "CN"
+    assert stock_client.put("/api/v1/trade/1", headers={"X-Market": "CN"},
+                            json={"notes": "仅CN"}).status_code == 200
+    assert db_conn.execute("SELECT notes FROM trade_records WHERE id=1").fetchone()[0] is None
+    with get_connection("CN") as conn:
+        assert conn.execute("SELECT notes FROM trade_records WHERE id=1").fetchone()[0] == "仅CN"
+    assert stock_client.delete("/api/v1/trade/1").status_code == 200
+    assert db_conn.execute("SELECT COUNT(*) FROM trade_records").fetchone()[0] == 0
+    with get_connection("CN") as conn:
+        assert conn.execute("SELECT COUNT(*) FROM trade_records").fetchone()[0] == 1
+    assert stock_client.delete("/api/v1/trade/1", headers={"X-Market": "CN"}).status_code == 200
+    assert get_market() == "US"
+
+
+def test_cn_trade_text_uses_cn_and_rejects_us(stock_client):
+    import json
+    from modules.database import get_connection, init_database
+
+    init_database("CN")
+    record = {"ts_code": "600519.SH", "trade_date": "2026-10-20", "action": "buy",
+              "price": 1500, "quantity": 100, "amount": 150000}
+    response = stock_client.post("/api/v1/trade/", headers={"X-Market": "CN"},
+                                 json={"text": json.dumps(record)})
+    assert response.status_code == 200 and response.json()["success"]
+    record["ts_code"] = "AAPL.US"
+    assert stock_client.post("/api/v1/trade/", headers={"X-Market": "CN"},
+                             json={"text": json.dumps(record)}).status_code == 422
+    with get_connection("CN") as conn:
+        assert conn.execute("SELECT ts_code FROM trade_records").fetchone()[0] == "600519.SH"
+    with get_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM trade_records").fetchone()[0] == 0
+
+
 def test_list_defaults_to_us_stocks_and_uses_each_latest_quote(stock_client):
     response = stock_client.get("/api/v1/stock/list")
     assert response.status_code == 200

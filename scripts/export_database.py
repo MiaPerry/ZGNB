@@ -18,6 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from api.services.sync_service import backup_database  # noqa: E402
+from modules.database import get_db_path, market_context  # noqa: E402
 
 
 def export_database(source: Path, output: Path | None = None) -> dict:
@@ -79,17 +80,18 @@ def export_database(source: Path, output: Path | None = None) -> dict:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, help="默认使用当前环境 DB_PATH（相对路径基于项目根目录）")
+    parser.add_argument("--market", choices=["US", "CN"], default="US", help="默认源库所属工作空间（默认US）")
+    parser.add_argument("--source", type=Path, help="显式源库；未指定时使用所选工作空间配置路径")
     parser.add_argument("--output", type=Path, help="可选的新快照路径；默认放到源库旁 backups/exports 下")
     args = parser.parse_args(argv)
-    source = args.source
-    if source is None:
-        source = Path(os.environ.get("DB_PATH", "data/stock_data.db"))
-        if not source.is_absolute():
-            source = PROJECT_ROOT / source
     try:
-        print(json.dumps(export_database(source, args.output), ensure_ascii=False))
-        return 0
+        with market_context(args.market):
+            source = args.source.resolve() if args.source is not None else get_db_path()
+            report = export_database(source, args.output)
+            # 显式源库可能是旧迁移库，不从参数猜测其中数据的市场。
+            report.update(source=str(source), workspace_market=args.market if args.source is None else None)
+            print(json.dumps(report, ensure_ascii=False))
+            return 0
     except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
         print(f"导出失败：{exc}", file=sys.stderr)
         return 1

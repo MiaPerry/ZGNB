@@ -23,6 +23,8 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
 
+from modules.database import get_db_connection, get_db_path, get_market, market_context
+
 # dotenv 加载已移至 modules/__init__.py
 
 
@@ -102,17 +104,8 @@ class StockAssessment:
 
 # ==================== 数据加载 ====================
 def _resolve_db_path() -> str:
-    """统一从 DB_PATH env 读，fallback data/stock_data.db"""
-    p = os.environ.get("DB_PATH")
-    if p:
-        return p
-    return str(
-        os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "data",
-            "stock_data.db",
-        )
-    )
+    """通过统一出口解析当前请求或任务绑定的库路径。"""
+    return str(get_db_path())
 
 
 def _classify_sector(industry: str) -> str:
@@ -215,9 +208,7 @@ def assess_watchlist(
     调用方先确保 indicator_cache 表已 sync（用 DataSyncer.sync_all_indicators），
     本函数只读 DB 不计算。
     """
-    db = db_path or _resolve_db_path()
-    with closing(sqlite3.connect(db)) as conn, conn:
-        conn.row_factory = sqlite3.Row
+    with market_context(get_market(), db_path), closing(get_db_connection()) as conn, conn:
         return _build_assessments_from_db(ts_codes, conn)
 
 

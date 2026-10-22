@@ -38,6 +38,14 @@ class TradeSignal(Enum):
     WATCH = "WATCH"  # 观望
 
 
+LIMIT_UP_UNKNOWN_REASON = "缺少源端涨跌停价格，涨停条件不可判定"
+
+
+def limit_up_unknown(ts_code: str) -> bool:
+    """A股涨跌停需按源端限价判定；当前未入库，统一视为未知"""
+    return ts_code.endswith((".SH", ".SZ"))
+
+
 @dataclass
 class DailyData:
     """单日行情数据"""

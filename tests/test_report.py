@@ -397,6 +397,29 @@ class TestWriteAssessment:
 
 
 class TestAssessWatchlist:
+    def test_default_connection_uses_bound_cn_path(self, db_conn):
+        from modules.database import get_connection, get_db_path, init_database, market_context
+
+        init_database("CN")
+        db_conn.execute("INSERT INTO stock_basic(ts_code,name) VALUES ('600519.SH','US隔离样本')")
+        db_conn.commit()
+        with get_connection("CN") as conn:
+            conn.execute("INSERT INTO stock_basic(ts_code,name) VALUES ('600519.SH','CN样本')")
+        with market_context("CN"):
+            assert Path(_resolve_db_path()) == get_db_path()
+            assert assess_watchlist(["600519.SH"])[0].name == "CN样本"
+        assert assess_watchlist(["600519.SH"])[0].name == "US隔离样本"
+
+    def test_missing_cn_report_does_not_create_database(self, temp_db):
+        from modules.database import MarketUnavailableError, get_db_path, market_context
+
+        with market_context("CN"):
+            path = get_db_path()
+            assert not path.exists()
+            with pytest.raises(MarketUnavailableError, match="CN"):
+                assess_watchlist([])
+            assert not path.exists()
+
     def test_empty_codes(self, mock_env_for_tests, tmp_path):
         """空列表返回空"""
         db_path = str(tmp_path / "test.db")

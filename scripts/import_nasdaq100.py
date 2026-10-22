@@ -41,7 +41,7 @@ from api.services.sync_service import (  # noqa: E402
     classify_error,
     compute_market_end_date,
 )
-from modules.database import get_connection, get_db_path  # noqa: E402
+from modules.database import get_connection, get_db_path, market_context  # noqa: E402
 from scripts._common import PROJECT_ROOT  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -222,6 +222,12 @@ def _make_recompute():
 
 
 def main(argv=None):
+    """NASDAQ专用入口始终绑定US；返回或异常后恢复调用者市场。"""
+    with market_context("US"):
+        return _main_us(argv)
+
+
+def _main_us(argv=None):
     p = argparse.ArgumentParser(description="NASDAQ-100 + 原有美股/港股：历史回补或 --latest 增量更新")
     p.add_argument("--list", default=str(DEFAULT_LIST_PATH), help="成分股 JSON 文件")
     p.add_argument("--years", type=int, default=5, help="回补年数（默认 5）")

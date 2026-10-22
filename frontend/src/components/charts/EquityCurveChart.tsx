@@ -3,9 +3,10 @@ import ReactECharts from 'echarts-for-react';
 interface Props {
   equityCurve: [string, number][];
   height?: number;
+  seriesLabel: string;
 }
 
-export default function EquityCurveChart({ equityCurve, height = 300 }: Props) {
+export default function EquityCurveChart({ equityCurve, seriesLabel, height = 300 }: Props) {
   if (!equityCurve || equityCurve.length === 0) {
     return <div className="flex h-40 items-center justify-center text-text-muted">暂无数据</div>;
   }
@@ -29,6 +30,8 @@ export default function EquityCurveChart({ equityCurve, height = 300 }: Props) {
       axisLabel: { color: '#64748b', fontSize: 10 },
     },
     yAxis: {
+      name: seriesLabel,
+      nameTextStyle: { color: '#64748b', fontSize: 10 },
       type: 'value',
       scale: true,
       splitLine: { lineStyle: { color: '#1e293b' } },
@@ -37,6 +40,7 @@ export default function EquityCurveChart({ equityCurve, height = 300 }: Props) {
     },
     series: [
       {
+        name: seriesLabel,
         type: 'line',
         data: values,
         smooth: true,

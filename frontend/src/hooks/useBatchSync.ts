@@ -7,18 +7,25 @@ import {
 } from '../api/sync';
 import {
   STATUS_KEY,
+  marketKey,
   refreshAfterSync,
   shouldHandleTask,
 } from '../lib/syncLinkage';
 
+import { useAppStore } from '../stores/appStore';
+import type { WorkspaceMarket } from '../stores/appStore';
+
 export function useBatchSync() {
   const queryClient = useQueryClient();
+  const market = useAppStore((s) => s.currentMarket);
+  const initialized = useAppStore((s) => s.marketInitialized);
   // 同一任务只刷新一次，避免轮询重复触发
-  const handledTaskRef = useRef<string | null>(null);
+  const handledTaskRef = useRef<Partial<Record<WorkspaceMarket, string | null>>>({});
 
   const statusQuery = useQuery({
-    queryKey: STATUS_KEY,
-    queryFn: fetchBatchSyncStatus,
+    queryKey: marketKey(market, ...STATUS_KEY),
+    queryFn: ({ signal }) => fetchBatchSyncStatus(market, signal),
+    enabled: initialized,
     // 运行中每 2 秒轮询；空闲时低频检查，便于多页面识别同一任务
     refetchInterval: (query) =>
       query.state.data?.status === 'running' ? 2000 : 30000,
@@ -28,11 +35,11 @@ export function useBatchSync() {
   });
 
   const startMutation = useMutation({
-    mutationFn: startBatchSync,
-    onSuccess: (snapshot) => {
+    mutationFn: (request: { market: WorkspaceMarket }) => startBatchSync(request.market),
+    onSuccess: (snapshot, request) => {
       // 提交响应只是启动快照：写入查询缓存后，始终以轮询缓存为唯一状态来源，
       // 避免 running 快照长期遮盖轮询到的终态
-      queryClient.setQueryData(STATUS_KEY, snapshot);
+      queryClient.setQueryData(marketKey(request.market, ...STATUS_KEY), snapshot);
     },
   });
 
@@ -40,13 +47,14 @@ export function useBatchSync() {
 
   // 任务进入终态（completed / partial_failure / failed）时联动一次
   useEffect(() => {
-    if (!shouldHandleTask(handledTaskRef.current, snapshot)) return;
-    handledTaskRef.current = snapshot!.task_id;
-    refreshAfterSync(queryClient);
-  }, [snapshot, queryClient]);
+    if (!shouldHandleTask(handledTaskRef.current[market] ?? null, snapshot)) return;
+    handledTaskRef.current[market] = snapshot!.task_id;
+    refreshAfterSync(queryClient, market);
+  }, [snapshot, queryClient, market]);
 
   // 提交失败（如缺少配置）时提取后端错误信息
-  const startError = startMutation.error
+  const belongsHere = startMutation.variables?.market === market;
+  const startError = belongsHere && startMutation.error
     ? axios.isAxiosError(startMutation.error)
       ? String(startMutation.error.response?.data?.detail ?? startMutation.error.message)
       : String(startMutation.error)
@@ -55,8 +63,8 @@ export function useBatchSync() {
   return {
     snapshot,
     isRunning: snapshot?.status === 'running',
-    start: () => startMutation.mutate(),
-    isStarting: startMutation.isPending,
+    start: () => { if (initialized) startMutation.mutate({ market }); },
+    isStarting: belongsHere && startMutation.isPending,
     startError,
     // 状态轮询断网：只提示连接异常，不误判任务结束
     statusUnreachable: statusQuery.isError,

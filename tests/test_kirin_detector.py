@@ -14,7 +14,15 @@ from modules.indicators.kirin_detector import (
 )
 
 
-def _make_klines(n, start_price=100.0, daily_pct=0.0, vol_base=10000, limit_up_days=None, volume_pattern="normal"):
+def _make_klines(
+    n,
+    start_price=100.0,
+    daily_pct=0.0,
+    vol_base=10000,
+    limit_up_days=None,
+    volume_pattern="normal",
+    ts_code="000001.SZ",
+):
     """工厂函数：生成 DailyData K线序列"""
     klines = []
     price = start_price
@@ -49,7 +57,7 @@ def _make_klines(n, start_price=100.0, daily_pct=0.0, vol_base=10000, limit_up_d
             vol = vol_base
 
         k = DailyData(
-            ts_code="000001.SZ",
+            ts_code=ts_code,
             trade_date=date_str,
             open=prev_price * 0.998,
             high=price * 1.01,
@@ -261,8 +269,10 @@ class TestDetectKirinStage:
         assert result["indicators"]["red_green_ratio"] > 1.0
 
     def test_lasheng_stage(self):
-        """拉升阶段：快速脱离，有涨停，量价齐升"""
-        klines = _make_klines(60, start_price=100.0, daily_pct=0.8, limit_up_days=[30, 35, 40], volume_pattern="high")
+        """拉升阶段：快速脱离，有涨停，量价齐升（涨停条件需可判定，用港股阈值）"""
+        klines = _make_klines(
+            60, start_price=100.0, daily_pct=0.8, limit_up_days=[30, 35, 40], volume_pattern="high", ts_code="00700.HK"
+        )
         result = detect_kirin_stage(klines)
         assert result["stage"] == "拉升"
         assert result["operation"] == "不追，等回调B1"
@@ -291,13 +301,13 @@ class TestDetectKirinStage:
         assert result["operation"] == "准备走人"
 
     def test_luoluo_stage(self):
-        """回落阶段：缩量下跌"""
+        """回落阶段：缩量下跌（无涨停条件需可判定，用港股阈值）"""
         # 先拉升
-        klines = _make_klines(60, start_price=100.0, daily_pct=0.5)
+        klines = _make_klines(60, start_price=100.0, daily_pct=0.5, ts_code="00700.HK")
         # 后 20 天缩量下跌
         for i in range(40, 60):
             klines[i] = DailyData(
-                ts_code="000001.SZ",
+                ts_code="00700.HK",
                 trade_date=klines[i].trade_date,
                 open=klines[i].open * 0.98,
                 high=klines[i].high * 0.98,

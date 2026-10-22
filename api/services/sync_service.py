@@ -18,7 +18,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from modules.database import get_connection, get_db_path
+from modules.database import get_connection, get_db_path, get_market, market_context
 from modules.data_freshness import data_update_batch, get_data_status
 from modules.market_sync_lock import MarketSyncLease
 
@@ -33,7 +33,7 @@ _MARKET_OFFSETS = {"US": -4, "HK": 8}
 _MARKET_CLOSE_HOUR = {"US": 17, "HK": 17}
 
 # 错误分类关键字
-_RATE_LIMIT_KEYWORDS = ("最多访问", "限频", "频繁", "too many", "rate limit", "exceed", "429")
+_RATE_LIMIT_KEYWORDS = ("最多访问", "限频", "频繁", "频率超限", "too many", "rate limit", "exceed", "429")
 _AUTH_KEYWORDS = ("token", "权限", "未授权", "unauthorized", "forbidden", "401", "403")
 _NETWORK_KEYWORDS = ("timeout", "timed out", "connection", "网络", "unreachable", "reset", "proxy")
 
@@ -48,6 +48,8 @@ def _market_of(ts_code: str) -> str:
         return "US"
     if up.endswith(".HK"):
         return "HK"
+    if up.endswith((".SH", ".SZ")):
+        return "CN"
     return "OTHER"
 
 
@@ -63,6 +65,15 @@ def collect_us_hk_codes() -> list[str]:
         ).fetchall()
     codes = {row[0] for row in rows if row[0] and _is_us_hk(row[0])}
     return sorted(codes)
+
+
+def collect_workspace_codes() -> list[str]:
+    """只返回当前工作空间已登记、具备明确同步身份的标的。"""
+    if get_market() != "CN":
+        return collect_us_hk_codes()
+    with get_connection() as conn:
+        rows = conn.execute("SELECT ts_code FROM cn_asset_metadata").fetchall()
+    return sorted(row[0] for row in rows)
 
 
 def compute_market_end_date(beijing_now: datetime, market: str) -> str:
@@ -126,6 +137,51 @@ class YahooSyncer:
         return sync_indicator_cache_incremental(ts_code)
 
 
+class CNSyncer:
+    """把 Tushare 原始行情接入 CN 原子发布管线。"""
+
+    atomic_indicators = True
+
+    def __init__(self, client=None, lease=None):
+        if client is None:
+            from modules.tushare_client import TushareClient
+
+            client = TushareClient()
+        self._client = client
+        self._lease = lease
+        self._indicator_rows = {}
+
+    def sync_daily_kline(self, ts_code, start_date=None, end_date=None, raise_on_error=False) -> int:
+        from modules.data_sync import sync_cn_daily
+
+        result = sync_cn_daily(self._client, ts_code, start_date, end_date, lease=self._lease)
+        self._indicator_rows[ts_code] = result["indicator_rows"]
+        return result["new_rows"]
+
+    def sync_indicator_cache(self, ts_code) -> int:
+        # sync_cn_daily 已在同一发布事务内写入并复核全部指标，这里只回传任务统计。
+        return self._indicator_rows.pop(ts_code, 0)
+
+
+def sync_workspace_stock(ts_code, *, days=730, indicators=True, lease, now=None) -> int:
+    """在调用方持有的同库锁内同步单标的；CN始终走原子行情与指标发布。"""
+    from modules.database import validate_market_code
+
+    market = get_market()
+    validate_market_code(ts_code, market)
+    lease.validate_current_database()
+    current = now or _beijing_now()
+    start = (current - timedelta(days=days)).strftime("%Y%m%d")
+    end = compute_market_end_date(current, _market_of(ts_code))
+    if market == "CN":
+        return CNSyncer(lease=lease).sync_daily_kline(ts_code, start, end, raise_on_error=True)
+    syncer = YahooSyncer()
+    rows = syncer.sync_daily_kline(ts_code, start_date=start, end_date=end, raise_on_error=True)
+    if indicators:
+        syncer.sync_indicator_cache(ts_code)
+    return rows
+
+
 # ==================== 任务快照 ====================
 
 
@@ -134,6 +190,7 @@ class SyncTaskSnapshot:
     """同步任务状态快照（前端轮询展示用，全部字段可 JSON 序列化）"""
 
     task_id: str | None = None
+    workspace_market: str = "US"
     status: str = "idle"  # idle / running / completed / partial_failure / failed
     phase: str = "idle"  # idle / backup / sync / indicators / done
     current_code: str | None = None
@@ -191,23 +248,33 @@ class USStockSyncService:
         rate_limit_wait: float = 65.0,
         network_backoff: float = 5.0,
         max_attempts: int = 3,
+        market: str | None = None,
+        db_path: str | Path | None = None,
     ):
+        with market_context(market if market is not None else get_market(), db_path) as binding:
+            self.binding = binding
         self._syncer = syncer
         self._sleep = sleep
         self._now = now_provider
-        self._backup_dir = Path(backup_dir) if backup_dir else get_db_path().parent / "backups"
+        self._backup_dir = Path(backup_dir) if backup_dir else self.binding.db_path.parent / "backups"
         self._rate_limit_wait = rate_limit_wait
         self._network_backoff = network_backoff
         self._max_attempts = max_attempts
 
         self._lock = threading.Lock()
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="us-sync")
-        self._snapshot = SyncTaskSnapshot()
+        self._snapshot = SyncTaskSnapshot(workspace_market=self.binding.market)
         self._future = None
+        self._active_lease = None
 
     # ---------- 公开接口 ----------
 
     def submit(self) -> SyncTaskSnapshot:
+        """提交时使用实例的固定库身份，不随调用者当前市场改变。"""
+        with market_context(self.binding.market, self.binding.db_path):
+            return self._submit()
+
+    def _submit(self) -> SyncTaskSnapshot:
         """提交同步任务；已有运行中的任务时直接返回当前任务快照"""
         with self._lock:
             if self._snapshot.status == "running":
@@ -216,6 +283,7 @@ class USStockSyncService:
             lease = MarketSyncLease.acquire(task_id)
             self._snapshot = SyncTaskSnapshot(
                 task_id=task_id,
+                workspace_market=self.binding.market,
                 status="running",
                 phase="backup",
                 message="任务已启动",
@@ -259,13 +327,20 @@ class USStockSyncService:
                 setattr(self._snapshot, key, value)
 
     def _get_syncer(self):
-        if self._syncer is None:
-            self._syncer = YahooSyncer()
+        if self._syncer is not None:
+            return self._syncer
+        if self.binding.market == "CN":
+            return CNSyncer(lease=self._active_lease)
+        self._syncer = YahooSyncer()
         return self._syncer
 
     def _run_guarded(self, lease):
-        with lease:
-            self._run()
+        with lease, market_context(self.binding.market, self.binding.db_path):
+            self._active_lease = lease
+            try:
+                self._run()
+            finally:
+                self._active_lease = None
 
     def _run(self):
         try:
@@ -280,13 +355,13 @@ class USStockSyncService:
             )
 
     def _run_inner(self):
-        codes = collect_us_hk_codes()
+        codes = collect_workspace_codes()
         self._update(total=len(codes))
         if not codes:
             self._update(
                 status="completed",
                 phase="done",
-                message="当前库中没有可同步的美股/港股",
+                message=f"当前{self.binding.market}工作空间中没有可同步标的",
                 finished_at=datetime.now().isoformat(timespec="seconds"),
             )
             return
@@ -294,7 +369,8 @@ class USStockSyncService:
         # 写入前备份；失败则停止，不碰数据
         try:
             stamp = datetime.now().strftime('%Y%m%d-%H%M%S-%f')
-            backup_database(self._backup_dir / f"us-hk-pre-sync-{stamp}-{self._snapshot.task_id}.db")
+            prefix = "cn" if self.binding.market == "CN" else "us-hk"
+            backup_database(self._backup_dir / f"{prefix}-pre-sync-{stamp}-{self._snapshot.task_id}.db")
         except Exception as e:
             self._update(
                 status="failed",
@@ -411,6 +487,8 @@ class USStockSyncService:
     def _fill_indicators(self, syncer, code, added):
         from modules.indicators.cache_builder import missing_dates
 
+        if getattr(syncer, "atomic_indicators", False):
+            return syncer.sync_indicator_cache(code)
         with get_connection() as conn:
             missing = missing_dates(conn, code)
         if not added and not missing:
@@ -427,14 +505,15 @@ class USStockSyncService:
 
 # ==================== 服务单例 ====================
 
-_service: USStockSyncService | None = None
+_services: dict[tuple[str, Path], USStockSyncService] = {}
 _service_lock = threading.Lock()
 
 
-def get_a_share_sync_service() -> USStockSyncService:
-    """获取全局同步服务单例（名称保留以兼容路由；us 分支同步美股/港股）"""
-    global _service
-    with _service_lock:
-        if _service is None:
-            _service = USStockSyncService()
-        return _service
+def get_a_share_sync_service(market=None, db_path=None) -> USStockSyncService:
+    """按市场和解析库路径获取固定实例；旧无参数调用仍默认US。"""
+    with market_context(market if market is not None else get_market(), db_path) as binding:
+        key = (binding.market, binding.db_path)
+        with _service_lock:
+            if key not in _services:
+                _services[key] = USStockSyncService(market=binding.market, db_path=binding.db_path)
+            return _services[key]

@@ -97,6 +97,672 @@ def _rate_limit_global() -> None:
     _GLOBAL_LIMITER.wait()
 
 
+def select_cn_constituent_snapshot(frame, cutoff: str, open_dates: set[str], *,
+                                   source: str = "tushare.index_weight:399300.SZ") -> dict:
+    """按单个有效交易日固化完整沪深300快照，不把多日成分混为一份名单。"""
+    import hashlib
+    import json
+    import math
+    import pandas as pd
+    from .database import validate_market_code
+
+    cutoff_day = datetime.strptime(cutoff, "%Y%m%d")
+    required = {"index_code", "trade_date", "con_code", "weight"}
+    if not isinstance(frame, pd.DataFrame) or not required.issubset(frame.columns):
+        raise ValueError("沪深300成分快照结构缺失")
+    for date, group in sorted(frame.groupby("trade_date"), key=lambda item: str(item[0]), reverse=True):
+        try:
+            date = str(date)
+            age = (cutoff_day - datetime.strptime(date, "%Y%m%d")).days
+            if date not in open_dates or not 0 <= age <= 62 or len(group) != 300:
+                continue
+            if set(group["index_code"]) != {"399300.SZ"}:
+                continue
+            pairs = sorted((validate_market_code(str(row.con_code), "CN"), float(row.weight))
+                           for row in group.itertuples())
+            codes = [code for code, _ in pairs]
+            if len(set(codes)) != 300 or "000300.SH" in codes:
+                continue
+            if any(not math.isfinite(weight) or weight <= 0 for _, weight in pairs):
+                continue
+            if not 99.5 <= sum(weight for _, weight in pairs) <= 100.5:
+                continue
+            result = {"source": source, "trade_date": date,
+                      "codes": codes, "weights": dict(pairs)}
+            serialized = json.dumps(result, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+            result["sha256"] = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+            return result
+        except (ValueError, TypeError):
+            continue
+    raise ValueError("沪深300没有完整且不超过62天的有效成分快照")
+
+
+CSINDEX_CLOSEWEIGHT_URL = (
+    "https://oss-ch.csindex.com.cn/static/html/csindex/public/uploads/file/autofile/"
+    "closeweight/000300closeweight.xls"
+)
+
+
+def parse_csindex_closeweight(content: bytes, cutoff: str, open_dates: set[str]) -> dict:
+    """解析中证官网月末权重文件；仍严格验证单日300成分、交易日及时效。"""
+    import re
+    import pandas as pd
+    import xlrd
+
+    if not content or len(content) > 2 * 1024 * 1024:
+        raise ValueError("中证权重文件为空或超过大小限制")
+    try:
+        sheet = xlrd.open_workbook(file_contents=content).sheet_by_index(0)
+    except (xlrd.XLRDError, IndexError, ValueError):
+        raise ValueError("中证权重文件不是有效xls") from None
+    if sheet.nrows != 301 or sheet.ncols != 10:
+        raise ValueError("中证权重文件不是完整300成分结构")
+    headers = [str(value).lower().replace(" ", "") for value in sheet.row_values(0)]
+    if any(token not in headers[column] for column, token in
+           ((0, "date"), (1, "indexcode"), (4, "constituentcode"), (8, "exchange(eng)"), (9, "weight"))):
+        raise ValueError("中证权重文件列结构无效")
+    exchanges = {"Shanghai Stock Exchange": "SH", "Shenzhen Stock Exchange": "SZ"}
+    rows = []
+    for number in range(1, sheet.nrows):
+        row = sheet.row_values(number)
+        code = str(row[4]).strip()
+        index = str(row[1]).strip()
+        if not re.fullmatch(r"\d{6}", code) or index != "000300":
+            raise ValueError("中证成分代码或指数身份无效")
+        suffix = exchanges.get(str(row[8]).strip())
+        if not suffix:
+            raise ValueError("中证成分交易所无效")
+        rows.append({"index_code": "399300.SZ", "trade_date": str(row[0]).strip(),
+                     "con_code": f"{code}.{suffix}", "weight": row[9]})
+    return select_cn_constituent_snapshot(pd.DataFrame(rows), cutoff, open_dates,
+                                          source="csindex.closeweight:000300")
+
+
+def download_csindex_closeweight() -> bytes:
+    """只从固定中证公开地址读取有限大小文件，不写数据库或配置。"""
+    from urllib.request import urlopen
+
+    with urlopen(CSINDEX_CLOSEWEIGHT_URL, timeout=30) as response:
+        content = response.read(2 * 1024 * 1024 + 1)
+    if len(content) > 2 * 1024 * 1024:
+        raise ValueError("中证权重文件超过大小限制")
+    return content
+
+
+def load_cn_constituent_snapshot(client, cutoff: str) -> dict:
+    """只读预取最近三个月；调用错误不伪装为空名单，不无限回查过期成分。"""
+    import pandas as pd
+
+    cutoff_day = datetime.strptime(cutoff, "%Y%m%d")
+    month = cutoff_day.replace(day=1)
+    windows = []
+    for _ in range(3):
+        next_month = (month.replace(day=28) + timedelta(days=4)).replace(day=1)
+        windows.append((month.strftime("%Y%m%d"), min(cutoff_day, next_month - timedelta(days=1)).strftime("%Y%m%d")))
+        month = (month - timedelta(days=1)).replace(day=1)
+    calendar = client.get_trade_cal(start_date=windows[-1][0], end_date=cutoff, raise_on_error=True)
+    if (not isinstance(calendar, pd.DataFrame) or not {"cal_date", "is_open"}.issubset(calendar.columns)
+            or calendar["cal_date"].duplicated().any()
+            or not set(calendar["is_open"].astype(str)).issubset({"0", "1"})):
+        raise ValueError("CN交易日历结构无效，不能核验成分快照")
+    expected = set(pd.date_range(windows[-1][0], cutoff).strftime("%Y%m%d"))
+    if not expected.issubset(set(calendar["cal_date"].astype(str))):
+        raise ValueError("CN交易日历覆盖缺失，不能核验成分快照")
+    open_dates = set(calendar.loc[calendar["is_open"].astype(str) == "1", "cal_date"].astype(str))
+    for start, end in windows:
+        frame = client.get_index_weight(start, end)
+        if isinstance(frame, pd.DataFrame) and "trade_date" in frame.columns:
+            frame = frame.loc[frame["trade_date"].astype(str).between(start, end)]
+        try:
+            return select_cn_constituent_snapshot(frame, cutoff, open_dates)
+        except ValueError:
+            continue
+    raise ValueError("沪深300最近三个月内无完整及时成分快照，禁止初始化名单")
+
+
+def collect_legacy_cn_assets(conn) -> dict[str, dict]:
+    """从固定源快照收集合并引用；不因基本资料缺失而漏掉行情或个人记录。"""
+    from .database import validate_market_code
+
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    result = {}
+    for table in ("stock_basic", "daily_kline", "watchlist", "trade_records", "tracking_pool_self",
+                  "tracking_records_self", "monthly_reviews_self"):
+        if table not in tables:
+            continue
+        available = {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")')}
+        columns = [key for key in ("ts_code", "name", "area", "industry", "market", "list_date", "is_hs") if key in available]
+        for row in conn.execute(f"SELECT DISTINCT {','.join(columns)} FROM \"{table}\" "
+                                "WHERE ts_code LIKE '%.SH' OR ts_code LIKE '%.SZ'"):
+            info = dict(row)
+            code = info.get("ts_code")
+            if not isinstance(code, str) or not code.endswith((".SH", ".SZ")):
+                continue
+            validate_market_code(code, "CN")
+            existing = result.setdefault(code, {})
+            for key in ("name", "area", "industry", "market", "list_date", "is_hs"):
+                if info.get(key) and not existing.get(key):
+                    existing[key] = info[key]
+    return result
+
+
+def build_cn_seed_assets(legacy: dict[str, dict], snapshot: dict, basic_rows) -> list[dict]:
+    """初始化种子=旧代码并集成分快照；指数单列，不把全A股基本资料全部收录。"""
+    import hashlib
+    import json
+    from .database import validate_market_code
+
+    payload = {key: snapshot[key] for key in ("source", "trade_date", "codes", "weights")}
+    fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False,
+                                            separators=(",", ":")).encode("utf-8")).hexdigest()
+    if fingerprint != snapshot.get("sha256"):
+        raise ValueError("沪深300快照与固定摘要不一致，拒绝变更名单")
+    members = set(snapshot["codes"])
+    codes = members | {validate_market_code(code, "CN") for code in legacy}
+    codes.discard("000300.SH")
+    basic = {row["ts_code"]: row for row in basic_rows if row.get("ts_code") in codes}
+    assets = []
+    for code in sorted(codes):
+        info = dict(legacy.get(code, {}))
+        info.update({key: value for key, value in basic.get(code, {}).items() if value is not None and value != ""})
+        assets.append({**info, "ts_code": code, "asset_type": "stock", "currency": "CNY",
+                       "sources": sorted((["legacy"] if code in legacy else []) + (["hs300"] if code in members else [])),
+                       "is_seed": True, "is_hs300": code in members,
+                       "constituent_date": snapshot["trade_date"] if code in members else None,
+                       "snapshot_sha256": snapshot["sha256"] if code in members else None,
+                       "metadata_status": "complete" if info.get("name") and info.get("market") else "missing"})
+    assets.append({"ts_code": "000300.SH", "name": "沪深300", "market": "指数", "asset_type": "index",
+                   "currency": "CNY", "sources": ["reference"], "is_seed": False, "is_hs300": False,
+                   "metadata_status": "complete"})
+    return assets
+
+
+def register_cn_assets(conn, assets: list[dict], *, refresh_constituents: bool = False) -> None:
+    """由调用者事务发布名单；重复收录幂等，成分刷新只更新标记，不删旧股或个人数据。"""
+    import json
+    from .database import get_market, validate_market_code
+
+    if get_market() != "CN":
+        raise ValueError("CN资产名单只允许写入CN工作空间")
+    codes = [validate_market_code(row["ts_code"], "CN") for row in assets]
+    if len(set(codes)) != len(codes):
+        raise ValueError("CN资产名单存在重复代码")
+    for row in assets:
+        if row.get("asset_type") not in {"stock", "index"}:
+            raise ValueError("CN资产类型必须由元数据明确指定")
+        if row["ts_code"] == "000300.SH" and row["asset_type"] != "index":
+            raise ValueError("沪深300指数不能当作普通股票收录")
+    if refresh_constituents:
+        members = [row for row in assets if row.get("is_hs300")]
+        if len(members) != 300 or len({row.get("snapshot_sha256") for row in members}) != 1:
+            raise ValueError("沪深300成分刷新必须使用完整同一快照")
+        conn.execute("UPDATE cn_asset_metadata SET is_hs300=0,constituent_date=NULL,snapshot_sha256=NULL")
+    basic_columns = ("ts_code", "name", "area", "industry", "market", "list_date", "is_hs")
+    updates = ",".join(f"{key}=COALESCE(NULLIF(excluded.{key},''),stock_basic.{key})" for key in basic_columns[1:])
+    for row in assets:
+        code = row["ts_code"]
+        old = conn.execute("SELECT * FROM cn_asset_metadata WHERE ts_code=?", (code,)).fetchone()
+        old = dict(old) if old else {}
+        sources = sorted(set(json.loads(old.get("sources", "[]"))) | set(row.get("sources", [])))
+        conn.execute(f"INSERT INTO stock_basic({','.join(basic_columns)}) VALUES (?,?,?,?,?,?,?) "
+                     f"ON CONFLICT(ts_code) DO UPDATE SET {updates}", tuple(row.get(key) for key in basic_columns))
+        seed = bool(old.get("is_seed")) or (not refresh_constituents and bool(row.get("is_seed")))
+        status = row.get("metadata_status", "complete" if row.get("name") and row.get("market") else "missing")
+        if old.get("metadata_status") == "complete" and status == "missing":
+            status = "complete"
+        conn.execute("INSERT INTO cn_asset_metadata(ts_code,asset_type,currency,sources,is_seed,is_hs300,"
+                     "constituent_date,snapshot_sha256,list_status,metadata_status) VALUES (?,?,?,?,?,?,?,?,?,?) "
+                     "ON CONFLICT(ts_code) DO UPDATE SET asset_type=excluded.asset_type,currency=excluded.currency,"
+                     "sources=excluded.sources,is_seed=excluded.is_seed,is_hs300=excluded.is_hs300,"
+                     "constituent_date=excluded.constituent_date,snapshot_sha256=excluded.snapshot_sha256,"
+                     "list_status=excluded.list_status,metadata_status=excluded.metadata_status",
+                     (code, row["asset_type"], row.get("currency", "CNY"), json.dumps(sources, ensure_ascii=False),
+                      int(seed), int(row.get("is_hs300", old.get("is_hs300", 0))),
+                      row.get("constituent_date", old.get("constituent_date")),
+                      row.get("snapshot_sha256", old.get("snapshot_sha256")), row.get("list_status", old.get("list_status")), status))
+
+
+def collect_cn_sync_codes(conn) -> list[str]:
+    """当前已收录个股集合包含后续手动添加项，指数按元数据进入独立链路。"""
+    from .database import get_market, validate_market_code
+
+    if get_market() != "CN":
+        raise ValueError("CN同步名单只能从CN工作空间读取")
+    rows = conn.execute("SELECT ts_code FROM stock_basic UNION SELECT ts_code FROM daily_kline "
+                        "UNION SELECT ts_code FROM cn_asset_metadata").fetchall()
+    indexes = {row[0] for row in conn.execute("SELECT ts_code FROM cn_asset_metadata WHERE asset_type='index'")}
+    return sorted({validate_market_code(row[0], "CN") for row in rows if row[0] not in indexes})
+
+
+CN_PRICE_BASIS_VERSION = "tushare-raw-v1:shares-cny:qfq-confirmed-close"
+# index_daily官方接口单位独立核实：手/千元；点位不复权（doc_id=95）。
+CN_INDEX_BASIS_VERSION = "tushare-index_daily-v1:shares-cny:points"
+
+
+def _cn_source_records(frame, code, fields, label):
+    """源端结构与日期必须完整明确；不接受已适配行以免重复换算。"""
+    import pandas as pd
+    import re
+
+    if (not isinstance(frame, pd.DataFrame) or not {"ts_code", "trade_date", *fields}.issubset(frame.columns)
+            or "basis_version" in frame.columns):
+        raise ValueError(f"CN{label}源数据结构或口径无效")
+    result = {}
+    for row in frame.to_dict("records"):
+        date = row["trade_date"]
+        if row["ts_code"] != code or not isinstance(date, str) or not re.fullmatch(r"\d{8}", date):
+            raise ValueError(f"CN{label}代码或日期无效")
+        datetime.strptime(date, "%Y%m%d")
+        if date in result:
+            raise ValueError(f"CN{label}存在重复日期")
+        result[date] = row
+    return dict(sorted(result.items()))
+
+
+def build_cn_daily_candidate(code, daily, factors=None, *, asset_type="stock"):
+    """原始源数据只适配一次；个股按已确认行情复权，指数点位保持原样。"""
+    import math
+    from .database import validate_market_code
+    from .indicators.core import DailyData
+
+    validate_market_code(code, "CN")
+    if asset_type not in {"stock", "index"} or (code == "000300.SH" and asset_type != "index"):
+        raise ValueError("CN资产类型必须明确，不能把指数当个股复权")
+    fields = ("open", "high", "low", "close", "vol", "amount", "pct_chg")
+    raw = _cn_source_records(daily, code, fields, "日线")
+    if not raw:
+        raise ValueError("CN未返回有效日线，不能确认行情截止日")
+    confirmed = {}
+    if asset_type == "stock":
+        factor_map = _cn_source_records(factors, code, ("adj_factor",), "因子")
+        if not set(raw).issubset(factor_map):
+            raise ValueError("CN个股因子未覆盖全部日线日期")
+        confirmed = {date: float(factor_map[date]["adj_factor"]) for date in raw}
+        if any(not math.isfinite(value) or value <= 0 for value in confirmed.values()):
+            raise ValueError("CN复权因子必须为有限正数")
+    anchor_date = max(raw)
+    anchor_factor = confirmed.get(anchor_date)
+    basis = CN_PRICE_BASIS_VERSION if asset_type == "stock" else CN_INDEX_BASIS_VERSION
+    rows, bars = [], []
+    for date, source in raw.items():
+        values = {field: float(source[field]) for field in fields}
+        if any(not math.isfinite(value) for value in values.values()):
+            raise ValueError("CN日线价格或数量存在非有限值")
+        if (min(values[key] for key in ("open", "high", "low", "close")) <= 0
+                or values["high"] < max(values["open"], values["low"], values["close"])
+                or values["low"] > min(values["open"], values["close"])
+                or min(values["vol"], values["amount"]) < 0):
+            raise ValueError("CN日线价格或数量无效")
+        values["vol"] *= 100
+        values["amount"] *= 1000
+        rows.append({"ts_code": code, "trade_date": date, **values, "basis_version": basis})
+        ratio = confirmed[date] / anchor_factor if asset_type == "stock" else 1
+        adjusted = {**values, **{key: values[key] * ratio for key in ("open", "high", "low", "close")}}
+        bars.append(DailyData(ts_code=code, trade_date=date, **adjusted,
+                              prev_close=bars[-1].close if bars else adjusted["close"]))
+    return {"ts_code": code, "asset_type": asset_type, "raw_rows": rows,
+            "factor_rows": [{"ts_code": code, "trade_date": date, "adj_factor": value}
+                            for date, value in confirmed.items()],
+            "bars": bars, "anchor_date": anchor_date, "anchor_factor": anchor_factor,
+            "basis_version": basis}
+
+
+def _validate_cn_candidate(candidate):
+    """发布前再次验证已规范化口径；校验不做单位换算或读取活动库。"""
+    import math
+
+    def require(condition):
+        if not condition:
+            raise ValueError("候选口径校验失败")
+
+    try:
+        code, asset_type = candidate["ts_code"], candidate["asset_type"]
+        basis = {"stock": CN_PRICE_BASIS_VERSION, "index": CN_INDEX_BASIS_VERSION}[asset_type]
+        bars, raw_rows, factors = candidate["bars"], candidate["raw_rows"], candidate["factor_rows"]
+        dates = [bar.trade_date for bar in bars]
+        require(dates and dates == sorted(set(dates)) and len(raw_rows) == len(dates))
+        require(candidate["basis_version"] == basis and candidate["anchor_date"] == dates[-1])
+        require([row["trade_date"] for row in raw_rows] == dates)
+        factor_map = {row["trade_date"]: row["adj_factor"] for row in factors}
+        if asset_type == "stock":
+            require(len(factors) == len(dates) and set(factor_map) == set(dates))
+            require(all(row["ts_code"] == code and math.isfinite(row["adj_factor"]) and row["adj_factor"] > 0
+                        for row in factors))
+            require(candidate["anchor_factor"] == factor_map[dates[-1]])
+        else:
+            require(not factors and candidate["anchor_factor"] is None)
+        for bar, raw in zip(bars, raw_rows):
+            require(bar.ts_code == raw["ts_code"] == code and raw["basis_version"] == basis)
+            ratio = factor_map[bar.trade_date] / candidate["anchor_factor"] if asset_type == "stock" else 1
+            for key in ("open", "high", "low", "close", "vol", "amount", "pct_chg"):
+                expected = raw[key] * ratio if key in {"open", "high", "low", "close"} else raw[key]
+                require(math.isfinite(expected) and math.isclose(getattr(bar, key), expected, rel_tol=1e-12, abs_tol=1e-12))
+    except (KeyError, TypeError, ValueError, ZeroDivisionError, OverflowError):
+        raise ValueError("CN候选与原始行情、因子或口径不一致") from None
+
+
+def cn_daily_request_start(start_date, stored_dates, *, history_repair=False):
+    """日常回查五个已存交易日，历史修复保留旧最早日期。"""
+    datetime.strptime(start_date, "%Y%m%d")
+    dates = sorted(set(stored_dates))
+    for date in dates:
+        datetime.strptime(date, "%Y%m%d")
+    if not dates:
+        return start_date
+    return min(start_date, dates[0]) if history_repair else dates[max(0, len(dates) - 5)]
+
+
+def merge_cn_daily_candidate(code, daily, factors=None, *, stored_raw=(), asset_type="stock"):
+    """旧依据已是股/元口径，只适配新增源数据，合并后统一锚定全部历史。"""
+    from copy import deepcopy
+    from .indicators.core import DailyData
+    from .database import validate_market_code
+
+    validate_market_code(code, "CN")
+    basis = {"stock": CN_PRICE_BASIS_VERSION, "index": CN_INDEX_BASIS_VERSION}.get(asset_type)
+    if basis is None:
+        raise ValueError("CN资产类型无效")
+    raw_map = {}
+    for raw in deepcopy(list(stored_raw)):
+        if raw["ts_code"] != code or raw["basis_version"] != basis or raw["trade_date"] in raw_map:
+            raise ValueError("CN旧原始行情口径或代码无效，需要历史修复")
+        raw_map[raw["trade_date"]] = raw
+    fields = ("open", "high", "low", "close", "vol", "amount", "pct_chg")
+    fresh = _cn_source_records(daily, code, fields, "日线")
+    if fresh:
+        adapted = build_cn_daily_candidate(code, daily, factors, asset_type=asset_type)
+        raw_map.update({row["trade_date"]: row for row in adapted["raw_rows"]})
+    if not raw_map:
+        raise ValueError("CN未返回有效日线，不能确认行情截止日")
+    factor_map = _cn_source_records(factors, code, ("adj_factor",), "因子") if asset_type == "stock" else {}
+    if asset_type == "stock" and not set(raw_map).issubset(factor_map):
+        raise ValueError("CN个股因子未覆盖全部已保存日线日期")
+    anchor = max(raw_map)
+    anchor_factor = float(factor_map[anchor]["adj_factor"]) if asset_type == "stock" else None
+    bars, rows, confirmed = [], [], []
+    for date, raw in sorted(raw_map.items()):
+        datetime.strptime(date, "%Y%m%d")
+        factor = float(factor_map[date]["adj_factor"]) if asset_type == "stock" else None
+        if asset_type == "stock":
+            confirmed.append({"ts_code": code, "trade_date": date, "adj_factor": factor})
+        if asset_type == "stock" and (anchor_factor <= 0 or factor <= 0):
+            raise ValueError("CN复权因子必须为有限正数")
+        ratio = factor / anchor_factor if asset_type == "stock" else 1
+        values = {key: raw[key] * ratio if key in {"open", "high", "low", "close"} else raw[key] for key in fields}
+        bars.append(DailyData(ts_code=code, trade_date=date, **values,
+                              prev_close=bars[-1].close if bars else values["close"]))
+        rows.append(raw)
+    candidate = {"ts_code": code, "asset_type": asset_type, "raw_rows": rows, "factor_rows": confirmed,
+                 "bars": bars, "anchor_date": anchor, "anchor_factor": anchor_factor, "basis_version": basis}
+    _validate_cn_candidate(candidate)
+    return candidate
+
+
+def _cn_history_ranges(start_date, end_date):
+    """五年历史一次读取；更早历史按5000自然日切段，留在单次6000行上限内。"""
+    first, end = datetime.strptime(start_date, "%Y%m%d"), datetime.strptime(end_date, "%Y%m%d")
+    if first > end:
+        raise ValueError("CN历史起止日期无效")
+    while first <= end:
+        last = min(end, first + timedelta(days=4999))
+        yield first.strftime("%Y%m%d"), last.strftime("%Y%m%d")
+        first = last + timedelta(days=1)
+
+
+def fetch_cn_history(client, code, start_date, end_date, *, asset_type="stock", metadata=None):
+    """按有界整段抓原始数据并严格核验覆盖；未知缺口不连接或写入业务库。"""
+    import pandas as pd
+    from .database import validate_market_code
+
+    validate_market_code(code, "CN")
+    if asset_type not in {"stock", "index"}:
+        raise ValueError("CN资产类型无效")
+    fields = ("open", "high", "low", "close", "vol", "amount", "pct_chg")
+    all_daily, all_factors, explained = {}, {}, {}
+    metadata = metadata or {}
+    listed = metadata.get("list_date")
+    delisted = metadata.get("delist_date") if metadata.get("list_status") == "D" else None
+    for date in (listed, delisted):
+        if date:
+            datetime.strptime(date, "%Y%m%d")
+    for first, last in _cn_history_ranges(start_date, end_date):
+        calendar = client.get_trade_cal(exchange="SSE", start_date=first, end_date=last, raise_on_error=True)
+        if not isinstance(calendar, pd.DataFrame) or not {"cal_date", "is_open"}.issubset(calendar.columns):
+            raise ValueError("CN交易日历返回结构无效")
+        expected_days = {(datetime.strptime(first, "%Y%m%d") + timedelta(days=n)).strftime("%Y%m%d")
+                         for n in range((datetime.strptime(last, "%Y%m%d") - datetime.strptime(first, "%Y%m%d")).days + 1)}
+        if (len(calendar) != len(expected_days) or set(calendar.cal_date) != expected_days
+                or not calendar.is_open.isin([0, 1]).all()):
+            raise ValueError("CN交易日历截断或日期无效")
+        open_days = set(calendar.loc[calendar.is_open == 1, "cal_date"])
+        active = {day for day in open_days if (not listed or day >= listed) and (not delisted or day <= delisted)}
+        for day in open_days - active:
+            explained[day] = "上市前" if listed and day < listed else "退市后"
+        frame = (client.get_raw_daily(code, first, last) if asset_type == "stock" else
+                 client.get_index_daily(code, first, last, raise_on_error=True))
+        daily = _cn_source_records(frame, code, fields, "日线")
+        if not set(daily).issubset(active):
+            raise ValueError("CN日线超出请求范围、交易日历或上市边界")
+        if asset_type == "stock":
+            factors = _cn_source_records(client.get_adj_factor(code, first, last), code, ("adj_factor",), "因子")
+            if not set(factors).issubset(expected_days) or not set(daily).issubset(factors):
+                raise ValueError("CN因子截断或未覆盖日线日期")
+            all_factors.update(factors)
+        missing = active - set(daily)
+        if missing and asset_type == "stock":
+            suspension = client.get_suspend_d(code, first, last)
+            stops = _cn_source_records(suspension, code, ("suspend_type", "suspend_timing"), "停牌")
+            full_day = {day for day, row in stops.items() if row["suspend_type"] == "S"
+                        and (pd.isna(row["suspend_timing"]) or row["suspend_timing"] == "")}
+            for day in missing & full_day:
+                explained[day] = "源端确认全天停牌"
+            missing -= full_day
+        if missing:
+            raise ValueError(f"CN历史存在无法解释的行情缺口：{len(missing)}日")
+        all_daily.update(daily)
+    daily_frame = pd.DataFrame(list(all_daily.values()), columns=["ts_code", "trade_date", *fields])
+    factor_frame = pd.DataFrame(list(all_factors.values()), columns=["ts_code", "trade_date", "adj_factor"])
+    # 数值与前复权锚也属于核心校验；完全没有行情留给调用方判断身份和可用状态。
+    if all_daily:
+        build_cn_daily_candidate(code, daily_frame, factor_frame, asset_type=asset_type)
+    coverage = {"complete": True, "start_date": start_date, "end_date": end_date,
+                "actual_last_date": max(all_daily, default=None), "explained_missing": sorted(explained),
+                "missing_reasons": explained, "rows": len(all_daily)}
+    return daily_frame, factor_frame, coverage
+
+
+def _cn_unchanged_prefix(conn, candidate):
+    """只有全部已发布依据与旧指标一致时允许纯尾部增量，否则覆盖重建。"""
+    code = candidate["ts_code"]
+    prices = ("ts_code", "trade_date", "open", "high", "low", "close", "vol", "amount", "pct_chg")
+    old_bars = [dict(row) for row in conn.execute(
+        f"SELECT {','.join(prices)} FROM daily_kline WHERE ts_code=? ORDER BY trade_date", (code,))]
+    old_dates = [row["trade_date"] for row in old_bars]
+    if not old_dates or old_dates != [bar.trade_date for bar in candidate["bars"]][:len(old_dates)]:
+        return None
+    publication = conn.execute("SELECT * FROM cn_daily_publication WHERE ts_code=?", (code,)).fetchone()
+    if (not publication or publication["asset_type"] != candidate["asset_type"]
+            or publication["basis_version"] != candidate["basis_version"]
+            or publication["anchor_factor"] != candidate["anchor_factor"]
+            or publication["anchor_date"] != old_dates[-1]):
+        return None
+    for table, columns, expected in (
+        ("daily_kline", prices, [vars(bar) for bar in candidate["bars"]][:len(old_dates)]),
+        ("cn_raw_daily", (*prices, "basis_version"), candidate["raw_rows"][:len(old_dates)]),
+        ("cn_adj_factor", ("ts_code", "trade_date", "adj_factor"),
+         [row for row in candidate["factor_rows"] if row["trade_date"] in set(old_dates)]),
+    ):
+        actual = [tuple(row) for row in conn.execute(
+            f"SELECT {','.join(columns)} FROM {table} WHERE ts_code=? ORDER BY trade_date", (code,))]
+        if actual != [tuple(row[key] for key in columns) for row in expected]:
+            return None
+    indicators = [dict(row) for row in conn.execute(
+        "SELECT * FROM indicator_cache WHERE ts_code=? ORDER BY trade_date", (code,))]
+    base = tuple(key for key in prices if key != "amount")
+    if len(indicators) != len(old_bars) or any(
+            tuple(row[key] for key in base) != tuple(bar[key] for key in base)
+            for row, bar in zip(indicators, old_bars)):
+        return None
+    return indicators
+
+
+def publish_cn_daily_candidate(candidate, expected_version, *, lease=None, force_rebuild=False, progress_callback=None):
+    """单标的候选在锁内计算、短事务原子发布；旧日期未覆盖则拒绝。"""
+    from uuid import uuid4
+    from contextlib import nullcontext
+    from . import data_freshness
+    from .database import get_market, market_context, validate_market_code, read_snapshot
+    from .market_sync_lock import MarketSyncLease
+    from .indicators import cache_builder, data_layer
+
+    if get_market() != "CN":
+        raise ValueError("CN候选只能发布到CN工作空间")
+    from copy import deepcopy
+    candidate = deepcopy(candidate)
+    code = validate_market_code(candidate["ts_code"], "CN")
+    _validate_cn_candidate(candidate)
+    if lease is not None:
+        if not isinstance(lease, MarketSyncLease):
+            raise ValueError("行情任务锁身份无效")
+        lease.validate_current_database()
+    with market_context("CN", get_db_path()), nullcontext(lease) if lease is not None else MarketSyncLease.acquire(uuid4().hex):
+        dates = {bar.trade_date for bar in candidate["bars"]}
+        with read_snapshot() as old:
+            if data_freshness._version(old, code) != expected_version:
+                raise RuntimeError("CN计算期间数据版本已改变，请重新生成候选")
+            old_dates = {row[0] for row in old.execute("SELECT trade_date FROM daily_kline WHERE ts_code=?", (code,))}
+            if not old_dates.issubset(dates):
+                raise ValueError("CN候选未覆盖旧历史，禁止删除已有行情")
+            prefix = None if force_rebuild else _cn_unchanged_prefix(old, candidate)
+        targets = dates - old_dates if prefix is not None else None
+        if targets == set():
+            return 0
+        rows = cache_builder.build_indicator_candidates(candidate["bars"], dates=targets)
+        if {row["trade_date"] for row in rows} != (dates if targets is None else targets):
+            raise ValueError("CN候选行情、因子与指标日期不一致")
+        expected_indicators = rows if prefix is None else [*prefix, *rows]
+        with get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if data_freshness._version(conn, code) != expected_version:
+                raise RuntimeError("CN计算期间数据版本已改变，请重新生成候选")
+            asset = conn.execute("SELECT asset_type FROM cn_asset_metadata WHERE ts_code=?", (code,)).fetchone()
+            if not asset or asset[0] != candidate["asset_type"]:
+                raise ValueError("CN候选资产类型与已登记元数据不一致")
+            old_dates = {row[0] for row in conn.execute("SELECT trade_date FROM daily_kline WHERE ts_code=?", (code,))}
+            if not old_dates.issubset(dates):
+                raise ValueError("CN候选未覆盖旧历史，禁止删除已有行情")
+            if prefix is None:
+                for table in ("cn_raw_daily", "cn_adj_factor", "daily_kline", "indicator_cache"):
+                    conn.execute(f"DELETE FROM {table} WHERE ts_code=?", (code,))
+            for raw in candidate["raw_rows"]:
+                if targets is not None and raw["trade_date"] not in targets:
+                    continue
+                columns = ("ts_code", "trade_date", "open", "high", "low", "close", "vol", "amount", "pct_chg", "basis_version")
+                conn.execute(f"INSERT INTO cn_raw_daily({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",
+                             tuple(raw[key] for key in columns))
+            conn.executemany("INSERT INTO cn_adj_factor(ts_code,trade_date,adj_factor) VALUES (?,?,?)",
+                             [(row["ts_code"], row["trade_date"], row["adj_factor"]) for row in candidate["factor_rows"]
+                              if targets is None or row["trade_date"] in targets])
+            for bar in candidate["bars"]:
+                if targets is not None and bar.trade_date not in targets:
+                    continue
+                columns = ("ts_code", "trade_date", "open", "high", "low", "close", "vol", "amount", "pct_chg")
+                conn.execute(f"INSERT INTO daily_kline({','.join(columns)},is_limit_up,is_limit_down) "
+                             f"VALUES ({','.join('?' for _ in columns)},NULL,NULL)",
+                             tuple(getattr(bar, key) for key in columns))
+            cache_builder.persist_indicator_rows(conn, rows)
+            # 核对实际落库值，不能用候选内存集合替代触发器等作用后的结果。
+            price_columns = ("ts_code", "trade_date", "open", "high", "low", "close", "vol", "amount", "pct_chg")
+            checks = (
+                ("cn_raw_daily", (*price_columns, "basis_version"), candidate["raw_rows"]),
+                ("cn_adj_factor", ("ts_code", "trade_date", "adj_factor"), candidate["factor_rows"]),
+                ("daily_kline", price_columns, [vars(bar) for bar in candidate["bars"]]),
+                ("indicator_cache", tuple(rows[0]), expected_indicators),
+            )
+            for table, columns, expected_rows in checks:
+                actual = [tuple(row) for row in conn.execute(
+                    f"SELECT {','.join(columns)} FROM {table} WHERE ts_code=? ORDER BY trade_date", (code,))]
+                expected = [tuple(row[key] for key in columns)
+                            for row in sorted(expected_rows, key=lambda row: row["trade_date"])]
+                if actual != expected:
+                    raise RuntimeError(f"CN事务内{table}校验失败")
+            conn.execute("INSERT INTO cn_daily_publication(ts_code,asset_type,basis_version,anchor_date,anchor_factor) "
+                         "VALUES (?,?,?,?,?) ON CONFLICT(ts_code) DO UPDATE SET asset_type=excluded.asset_type,"
+                         "basis_version=excluded.basis_version,anchor_date=excluded.anchor_date,"
+                         "anchor_factor=excluded.anchor_factor,published_at=CURRENT_TIMESTAMP",
+                         (code, candidate["asset_type"], candidate["basis_version"],
+                          candidate["anchor_date"], candidate["anchor_factor"]))
+            publication = conn.execute(
+                "SELECT asset_type,basis_version,anchor_date,anchor_factor FROM cn_daily_publication WHERE ts_code=?",
+                (code,),
+            ).fetchone()
+            if publication is None or tuple(publication) != (
+                    candidate["asset_type"], candidate["basis_version"], candidate["anchor_date"], candidate["anchor_factor"]):
+                raise RuntimeError("CN事务内发布口径与锚校验失败")
+            data_freshness.record_data_change(conn, code, candidate["anchor_date"])
+            if progress_callback is not None:
+                progress_callback(conn, candidate)
+        data_layer.clear_indicator_memory_cache(code)
+        return len(rows)
+
+
+def sync_cn_daily(client, code, start_date, end_date, *, lease=None, history_repair=False,
+                  metadata=None, progress_callback=None):
+    """锁覆盖下载和计算，发布时借用同库锁；新标的和历史修复先验证完整覆盖。"""
+    import pandas as pd
+    from uuid import uuid4
+    from contextlib import nullcontext
+    from .database import get_market, market_context, read_snapshot, validate_market_code
+    from .data_freshness import get_data_version
+    from .market_sync_lock import MarketSyncLease
+
+    if get_market() != "CN":
+        raise ValueError("CN同步只能在CN工作空间执行")
+    validate_market_code(code, "CN")
+    if lease is not None:
+        if not isinstance(lease, MarketSyncLease):
+            raise ValueError("行情任务锁身份无效")
+        lease.validate_current_database()
+    lock = nullcontext(lease) if lease is not None else MarketSyncLease.acquire(uuid4().hex)
+    with market_context("CN", get_db_path()), lock as held:
+        with read_snapshot() as conn:
+            asset = conn.execute("SELECT * FROM cn_asset_metadata WHERE ts_code=?", (code,)).fetchone()
+            basic = conn.execute("SELECT * FROM stock_basic WHERE ts_code=?", (code,)).fetchone()
+            if not asset:
+                raise ValueError("CN同步标的尚未登记明确资产类型")
+            info = {**(dict(basic) if basic else {}), **dict(asset), **(metadata or {})}
+            if info.get("ts_code", code) != code or info["asset_type"] != asset["asset_type"]:
+                raise ValueError("CN同步元数据与已登记标的身份不一致")
+            version = get_data_version(code)
+            stored_dates = [row[0] for row in conn.execute(
+                "SELECT trade_date FROM daily_kline WHERE ts_code=? ORDER BY trade_date", (code,))]
+            old_raw = [dict(row) for row in conn.execute(
+                "SELECT * FROM cn_raw_daily WHERE ts_code=? ORDER BY trade_date", (code,))]
+        first = min(start_date, stored_dates[0]) if stored_dates else start_date
+        complete_raw = {row["trade_date"] for row in old_raw} == set(stored_dates)
+        repair = history_repair or not complete_raw
+        request_start = cn_daily_request_start(first, stored_dates, history_repair=repair)
+        daily, factors, coverage = fetch_cn_history(client, code, request_start, end_date,
+                                                    asset_type=asset["asset_type"], metadata=info)
+        # 因子历史必须核对全部保存日期，不能仅比较五日重叠窗口或最后一个因子。
+        if asset["asset_type"] == "stock" and first < request_start:
+            chunks = []
+            before = (datetime.strptime(request_start, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
+            for begin, finish in _cn_history_ranges(first, before):
+                frame = client.get_adj_factor(code, begin, finish)
+                records = _cn_source_records(frame, code, ("adj_factor",), "因子")
+                if any(not begin <= date <= finish for date in records):
+                    raise ValueError("CN因子历史超出请求范围")
+                chunks.append(frame)
+            factors = pd.concat([*chunks, factors], ignore_index=True)
+        candidate = merge_cn_daily_candidate(code, daily, factors,
+                                             stored_raw=() if repair else old_raw, asset_type=asset["asset_type"])
+        written = publish_cn_daily_candidate(candidate, version, lease=held, force_rebuild=repair,
+                                              progress_callback=progress_callback)
+        return {"ts_code": code, "new_rows": len({bar.trade_date for bar in candidate["bars"]} - set(stored_dates)),
+                "indicator_rows": written, "actual_last_date": candidate["anchor_date"], "coverage": coverage}
+
+
 def sync_indicator_cache_incremental(ts_code: str) -> int:
     """仅补缺失日期，无需初始化任何行情客户端；失败向调用方传播。"""
     from .indicators.cache_builder import write_indicator_rows
@@ -104,26 +770,135 @@ def sync_indicator_cache_incremental(ts_code: str) -> int:
     return write_indicator_rows(ts_code)
 
 
+def sync_workspace_stocks(ts_codes: list[str], days: int = 730, *, mode: str = "daily_and_compute") -> dict[str, int]:
+    """工作空间脚本入口：固定库、同库写锁及备份，US使用Yahoo和离线指标。"""
+    from contextlib import ExitStack, closing
+    from uuid import uuid4
+    from api.services import sync_service
+    from .database import get_market, market_context, validate_market_code
+    from .data_freshness import data_update_batch
+    from .market_sync_lock import MarketSyncLease
+    from . import yahoo_sync
+
+    if mode not in {"missing", "daily", "daily_and_compute", "indicators"} or days < 1:
+        raise ValueError("同步模式或天数无效")
+    with market_context(get_market(), get_db_path()) as binding:
+        codes = list(dict.fromkeys(validate_market_code(code) for code in ts_codes))
+        if binding.market == "CN":
+            raise ValueError("CN行情与指标事务发布适配尚未就绪，不能使用旧同步入口")
+        if not codes:
+            return {}
+        with ExitStack() as resources:
+            task_id = uuid4().hex
+            resources.enter_context(MarketSyncLease.acquire(task_id))
+            if mode == "missing":
+                with get_connection() as conn:
+                    have = {row[0] for row in conn.execute("SELECT DISTINCT ts_code FROM daily_kline")}
+                codes = [code for code in codes if code not in have]
+            if not codes:
+                return {}
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            sync_service.backup_database(binding.db_path.parent / "backups" / f"US-pre-script-{stamp}-{task_id}.db")
+            resources.enter_context(data_update_batch())
+            session = None
+            now = sync_service._beijing_now()
+            start = (now - timedelta(days=days)).strftime("%Y%m%d")
+            with get_connection() as conn:
+                latest = dict(conn.execute("SELECT ts_code, MAX(trade_date) FROM daily_kline GROUP BY ts_code"))
+            results = {}
+            for code in codes:
+                if mode == "indicators":
+                    results[code] = sync_indicator_cache_incremental(code)
+                    continue
+                end = sync_service.compute_market_end_date(now, sync_service._market_of(code))
+                first = start
+                if latest.get(code):
+                    first = max(start, (datetime.strptime(latest[code], "%Y%m%d") + timedelta(days=1)).strftime("%Y%m%d"))
+                added = 0
+                if first <= end:
+                    if session is None:
+                        session = resources.enter_context(closing(yahoo_sync._default_session()))
+                    added = yahoo_sync.sync_us_daily(code, first, end, session=session, incremental=True)
+                    if not added:
+                        raise RuntimeError(f"{code} 数据源未返回新行情，不能确认已更新到 {end}")
+                results[code] = added
+                if mode == "daily_and_compute":
+                    sync_indicator_cache_incremental(code)
+            return results
+
+
+def run_workspace_sync_command(action, *, ts_code=None, days=730, indicators=False, skip_indicators=False):
+    """统一CLI与旧模块入口，避免默认US调用Tushare或导入全A股。"""
+    from .database import get_market, init_database, validate_market_code
+    from .data_freshness import get_data_status
+
+    if action == "status":
+        status = get_data_status()
+        print(f"工作空间 {get_market()} · 数据库: {get_db_path()}")
+        print(status)
+        return status
+    if ts_code:
+        validate_market_code(ts_code)
+    if get_market() == "CN":
+        raise ValueError("CN安全初始化与行情事务发布尚未就绪，请勿使用旧初始化/同步命令")
+    if action == "init":
+        init_database()
+        return
+    if action == "stk-factor":
+        raise ValueError("US工作空间不适用Tushare官方A股指标")
+    if action != "sync":
+        raise ValueError("同步操作无效")
+    from api.services.sync_service import collect_us_hk_codes
+
+    codes = [ts_code] if ts_code else collect_us_hk_codes()
+    mode = "daily_and_compute" if not skip_indicators and (ts_code or indicators) else "daily"
+    results = sync_workspace_stocks(codes, days=days, mode=mode)
+    print(f"{get_market()} 同步结束: {results}")
+    return results
+
+
+def _disabled_legacy_source_write(method):
+    """保留旧签名供兼容检测，在任何源请求、读库或写库前明确拒绝。"""
+    from functools import wraps
+
+    @wraps(method)
+    def disabled(*args, **kwargs):
+        raise ValueError("旧Tushare写入口已禁用：US请使用Yahoo工作空间同步，CN请使用安全初始化与原子发布管线")
+
+    return disabled
+
+
+def _bound_us_local_indicators(method):
+    """旧离线指标只允许US；实例和线程始终使用创建时固定的库。"""
+    from functools import wraps
+
+    @wraps(method)
+    def bound(self, *args, **kwargs):
+        from .database import get_market, market_context, validate_market_code
+
+        if get_market() == "CN":
+            raise ValueError("CN指标必须通过原子行情发布，不能使用旧离线写入口")
+        codes = args[0] if args else kwargs.get("ts_code", kwargs.get("ts_codes"))
+        for code in ([codes] if isinstance(codes, str) else codes or []):
+            validate_market_code(code, "US")
+        with market_context(self.binding.market, self.binding.db_path):
+            return method(self, *args, **kwargs)
+
+    return bound
+
+
 class DataSyncer:
-    """数据同步器"""
+    """US离线指标兼容入口；旧Tushare写入口不可执行。"""
 
     def __init__(self, token: str | None = None):
-        self.token = token or os.environ.get("TUSHARE_TOKEN")
-        # 仅在 JNB 模式下强制检查 Tushare 配置
-        data_mode = os.getenv("DATA_MODE", "websearch")
-        if data_mode == "jnb":
-            if not self.token:
-                raise ValueError("JNB 模式下未设置 TUSHARE_TOKEN，请检查 .env 文件。")
-            if not TUSHARE_API_URL:
-                raise ValueError(
-                    "JNB 模式下未设置 TUSHARE_API_URL，请在 .env 中配置中转 API 地址。\n"
-                    "示例：TUSHARE_API_URL=https://tt.xiaodefa.cn"
-                )
+        from .database import get_market, market_context
 
-        # 初始化 Tushare
-        ts.set_token(self.token)
-        self.pro = ts.pro_api()
-        self.pro._DataApi__http_url = TUSHARE_API_URL
+        if get_market() == "CN":
+            raise ValueError("CN指标必须通过原子行情发布，不能初始化旧同步器")
+        with market_context("US", get_db_path()) as binding:
+            self.binding = binding
+        self.token = token
+        self.pro = None
 
         # 向后兼容：保留 instance-level attrs（外部可能引用）
         # 但实际限流走模块级 _GLOBAL_LIMITER
@@ -176,6 +951,7 @@ class DataSyncer:
 
     # ==================== 股票基本信息 ====================
 
+    @_disabled_legacy_source_write
     def sync_stock_basic(self) -> int:
         """
         同步股票基本信息
@@ -208,6 +984,7 @@ class DataSyncer:
 
     # ==================== 日线K线数据 ====================
 
+    @_disabled_legacy_source_write
     def sync_daily_kline(
         self,
         ts_code: str,
@@ -308,6 +1085,7 @@ class DataSyncer:
                 raise
             return 0
 
+    @_disabled_legacy_source_write
     def sync_missing(self, ts_codes: list[str], days: int = 730) -> dict[str, int]:
         """
         同步 ts_codes 中"在 daily_kline 表里完全缺失"的股票（增量补齐）
@@ -347,6 +1125,7 @@ class DataSyncer:
             results[code] = count
         return results
 
+    @_disabled_legacy_source_write
     def sync_all_daily_kline(self, ts_codes: list[str] | None = None, days: int = 730) -> dict[str, int]:
         """
         批量同步多只股票的日线数据（并发执行）
@@ -415,6 +1194,7 @@ class DataSyncer:
 
     # ==================== 指标缓存 ====================
 
+    @_bound_us_local_indicators
     def sync_indicator_cache(self, ts_code: str, days: int = 120) -> int:
         """
         同步单只股票的技术指标到 indicator_cache 表
@@ -639,6 +1419,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
             self._log_sync("indicator_cache", ts_code, "", "failed", str(e))
             return 0
 
+    @_bound_us_local_indicators
     def sync_all_indicators(self, ts_codes: list[str] | None = None) -> dict[str, int]:
         """
         批量同步所有股票的指标缓存（并发执行）
@@ -687,6 +1468,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
         logger.info(f"批量指标同步完成，成功 {sum(1 for v in results.values() if v > 0)}/{len(ts_codes)}")
         return results
 
+    @_disabled_legacy_source_write
     def sync_daily_and_compute(self, ts_codes: list[str] | None = None, days: int = 730) -> dict[str, int]:
         """
         一站式：同步日线 K 线 + 同步指标缓存
@@ -714,6 +1496,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
 
     # ==================== Tushare 官方指标（用于 diff 验证） ====================
 
+    @_disabled_legacy_source_write
     def sync_stk_factor(self, ts_code: str, start_date: str | None = None, end_date: str | None = None) -> int:
         """
         同步单只股票的 Tushare 官方技术指标（stk_factor 接口）
@@ -787,6 +1570,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
             self._log_sync("stk_factor", ts_code, "", "failed", str(e))
             return 0
 
+    @_disabled_legacy_source_write
     def sync_all_stk_factor(self, ts_codes: list[str] | None = None, days: int = 365) -> dict[str, int]:
         """
         批量同步多只股票的 Tushare 官方指标（并发执行）
@@ -841,6 +1625,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
 
     # ==================== 每日估值指标 (PE/PB/PS) ====================
 
+    @_disabled_legacy_source_write
     def ensure_daily_basic_columns(self):
         """确保 daily_kline 表包含 PE/PB/PS/总市值/流通市值 列"""
         with get_connection() as conn:
@@ -861,6 +1646,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
                     cursor.execute(f"ALTER TABLE daily_kline ADD COLUMN {col_name} {col_type}")
                     logger.info(f"Added column {col_name} to daily_kline")
 
+    @_disabled_legacy_source_write
     def sync_daily_basic(self, ts_code: str, start_date: str = "", end_date: str = "") -> int:
         """
         同步单只股票的每日估值指标（PE/PB/PS/市值等）
@@ -925,6 +1711,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
             self._log_sync("daily_basic", ts_code, "", "failed", str(e))
             return 0
 
+    @_disabled_legacy_source_write
     def sync_all_daily_basic(self, ts_codes: list[str] | None = None, days: int = 730) -> dict[str, int]:
         """
         批量同步多只股票的每日估值指标（并发执行）
@@ -980,6 +1767,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
 
     # ==================== 资金流向 ====================
 
+    @_disabled_legacy_source_write
     def sync_moneyflow(self, ts_code: str, trade_date: str) -> int:
         """
         同步单只股票的单日资金流向
@@ -1079,7 +1867,8 @@ def main():
     """命令行入口"""
     import argparse
 
-    parser = argparse.ArgumentParser(description="Tushare 数据同步工具")
+    parser = argparse.ArgumentParser(description="工作空间数据同步工具")
+    parser.add_argument("--market", choices=["US", "CN"], default="US", help="工作空间市场（默认US）")
     parser.add_argument(
         "action",
         choices=["init", "sync", "status", "stk-factor"],
@@ -1096,62 +1885,12 @@ def main():
 
     args = parser.parse_args()
 
+    from .database import market_context
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-    if args.action == "init":
-        from .database import init_database
-
-        init_database()
-        print("数据库初始化完成")
-
-    elif args.action == "sync":
-        syncer = DataSyncer()
-
-        if args.ts_code:
-            # 同步单只股票
-            syncer.sync_daily_kline(args.ts_code)
-            # 单只股票默认同步指标缓存（除非显式跳过）
-            if not args.skip_indicators:
-                print(f"正在同步指标缓存: {args.ts_code} ...")
-                syncer.sync_indicator_cache(args.ts_code, days=args.days)
-        else:
-            # 批量同步所有股票
-            syncer.sync_stock_basic()
-            syncer.sync_all_daily_kline(days=args.days)
-            # 批量同步指标缓存（需显式指定 --indicators）
-            if args.indicators and not args.skip_indicators:
-                print("正在批量同步指标缓存...")
-                syncer.sync_all_indicators()
-
-        print("同步完成")
-        print(syncer.get_sync_status())
-
-    elif args.action == "stk-factor":
-        syncer = DataSyncer()
-
-        if args.ts_code:
-            print(f"正在同步 Tushare 官方指标: {args.ts_code} ...")
-            start_date = (datetime.now() - timedelta(days=args.days)).strftime("%Y%m%d")
-            end_date = datetime.now().strftime("%Y%m%d")
-            count = syncer.sync_stk_factor(args.ts_code, start_date=start_date, end_date=end_date)
-            print(f"同步完成，{count} 条")
-        else:
-            print("正在批量同步 Tushare 官方指标...")
-            results = syncer.sync_all_stk_factor(days=args.days)
-            success = sum(1 for v in results.values() if v > 0)
-            print(f"批量同步完成，成功 {success}/{len(results)}")
-
-    elif args.action == "status":
-        syncer = DataSyncer()
-        status = syncer.get_sync_status()
-        print("=" * 50)
-        print(f"数据库: {status['db_path']}")
-        print(f"股票数量: {status['stock_count']}")
-        print(f"K线数据: {status['kline_count']}")
-        print("-" * 50)
-        print("同步状态:")
-        for s in status["sync_status"]:
-            print(f"  {s['data_type']}: {s['last_date']} ({s['status']})")
+    with market_context(args.market):
+        return run_workspace_sync_command(args.action, ts_code=args.ts_code, days=args.days,
+                                          indicators=args.indicators, skip_indicators=args.skip_indicators)
 
 
 if __name__ == "__main__":

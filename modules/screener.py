@@ -9,7 +9,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import os
 
-from .database import get_connection, get_db_path, get_db_connection
+from .database import get_connection, get_db_path, get_db_connection, get_market, market_context, read_snapshot
+from contextlib import nullcontext
 from .indicators import DailyData, calculate_ma
 
 # 并行化阈值：小于此数量不启用多进程（启动开销不值得）
@@ -57,15 +58,23 @@ class MarketStatus:
 
 
 def get_all_stocks() -> list[dict]:
-    """获取所有股票基本信息（美股分支：仅获取美股）"""
+    """当前工作空间股票池：US仅美股；CN按已登记资产类型取个股，不依赖板块分类。"""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT ts_code, name, industry, market
-        FROM stock_basic
-        WHERE market = '美股'
-        ORDER BY ts_code
-    """)
+    if get_market() == "CN":
+        cursor.execute("""
+            SELECT m.ts_code, s.name, s.industry, s.market
+            FROM cn_asset_metadata m LEFT JOIN stock_basic s USING(ts_code)
+            WHERE m.asset_type = 'stock'
+            ORDER BY m.ts_code
+        """)
+    else:
+        cursor.execute("""
+            SELECT ts_code, name, industry, market
+            FROM stock_basic
+            WHERE market = '美股'
+            ORDER BY ts_code
+        """)
     stocks = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return stocks
@@ -77,7 +86,7 @@ def get_recent_klines(ts_code: str, days: int = 60) -> list[DailyData]:
     cursor = conn.cursor()
     cursor.execute(
         """
-        SELECT ts_code, trade_date, open, high, low, close, vol, pct_chg
+        SELECT ts_code, trade_date, open, high, low, close, vol, amount, pct_chg
         FROM daily_kline
         WHERE ts_code = ?
         ORDER BY trade_date DESC
@@ -88,6 +97,8 @@ def get_recent_klines(ts_code: str, days: int = 60) -> list[DailyData]:
 
     rows = cursor.fetchall()
     conn.close()
+    # CN存储的是源端真实成交额（元），前复权close×vol不能替代；US保留既有口径。
+    real_amount = get_market() == "CN"
 
     # 转换为升序
     data_list = []
@@ -102,7 +113,7 @@ def get_recent_klines(ts_code: str, days: int = 60) -> list[DailyData]:
                 low=row["low"],
                 close=row["close"],
                 vol=row["vol"],
-                amount=row["close"] * row["vol"],
+                amount=row["amount"] if real_amount else row["close"] * row["vol"],
                 pct_chg=row["pct_chg"],
                 prev_close=prev_close,
             )
@@ -582,12 +593,18 @@ def _daily_to_dict(klines: list[DailyData]) -> list[dict]:
     return result
 
 
-def _analyze_worker(ts_code: str) -> tuple[str, list[DailyData], StockScore] | None:
+def _analyze_worker(ts_code: str, market=None, db_path=None) -> tuple[str, list[DailyData], StockScore] | None:
     """
     并行 worker：评分单只股票
     必须在模块顶层定义，以便 ProcessPoolExecutor 可以 pickle
     返回: (ts_code, klines, score) 或 None
     """
+    with market_context(market if market is not None else get_market(), db_path):
+        with read_snapshot() if get_market() == "CN" else nullcontext():
+            return _analyze_bound_stock(ts_code)
+
+
+def _analyze_bound_stock(ts_code):
     klines = get_recent_klines(ts_code, 150)
     if not klines or len(klines) < 30:
         return None
@@ -743,6 +760,7 @@ def screen_stocks(
 
     返回：满足条件的 StockScore 列表（按评分降序）
     """
+    market, db_path = get_market(), str(get_db_path())
     stocks = get_all_stocks()
     limit = max_stocks if max_stocks > 0 else 500
     stocks = stocks[:limit]
@@ -765,7 +783,7 @@ def screen_stocks(
             ts_codes = [s["ts_code"] for s in stocks]
 
             with ProcessPoolExecutor(max_workers=workers) as executor:
-                future_map = {executor.submit(_analyze_worker, ts_code): ts_code for ts_code in ts_codes}
+                future_map = {executor.submit(_analyze_worker, ts_code, market, db_path): ts_code for ts_code in ts_codes}
                 for future in as_completed(future_map):
                     result = future.result()
                     if result and _filter_stock(result, criteria):
@@ -782,10 +800,53 @@ def screen_stocks(
     return results
 
 
+def _direction_from_ratio(rise_ratio: float) -> tuple[str, float, list[str]]:
+    if rise_ratio >= 0.6:
+        return "LONG", 75, ["上涨家数占优", "市场活跃"]
+    if rise_ratio <= 0.4:
+        return "SHORT", 25, ["下跌家数较多", "注意风险"]
+    return "NEUTRAL", 50, ["多空均衡", "观望为主"]
+
+
+_CN_REFERENCE_INDEX = "000300.SH"
+
+
+def _cn_market_status() -> MarketStatus:
+    """沪深300确定参照交易日，涨跌家数只统计当前股票池同日行情。"""
+    with read_snapshot() as conn:
+        index_rows = conn.execute(
+            "SELECT trade_date, close FROM daily_kline WHERE ts_code=? ORDER BY trade_date DESC LIMIT 20",
+            (_CN_REFERENCE_INDEX,),
+        ).fetchall()
+        if not index_rows:
+            return MarketStatus(trade_date="", market_direction="NEUTRAL", market_strength=50,
+                                reasons=["沪深300无行情，无法确认参照交易日", "观望为主"])
+        trade_date = index_rows[0]["trade_date"]
+        pool = conn.execute(
+            "SELECT k.pct_chg FROM daily_kline k JOIN cn_asset_metadata m USING(ts_code) "
+            "WHERE m.asset_type='stock' AND k.trade_date=?",
+            (trade_date,),
+        ).fetchall()
+    if len(index_rows) < 20:
+        index_reason = "沪深300行情不足20日，均线参照不可用"
+    else:
+        ma20 = sum(row["close"] for row in index_rows) / 20
+        side = "上方" if index_rows[0]["close"] >= ma20 else "下方"
+        index_reason = f"沪深300收盘位于20日均线{side}"
+    total = len(pool)
+    rises = sum(1 for row in pool if row["pct_chg"] > 0)
+    direction, strength, reasons = _direction_from_ratio(rises / total if total else 0.5)
+    scope = f"当前股票池{trade_date}上涨{rises}/{total}家（仅统计当前股票池，不代表全A股）"
+    return MarketStatus(trade_date=trade_date, is_trading=True, market_direction=direction,
+                        market_strength=strength, reasons=[index_reason, scope, *reasons])
+
+
 def get_market_status() -> MarketStatus:
     """
     获取大盘状态（简化版，用主要指数代替）
     """
+    if get_market() == "CN":
+        return _cn_market_status()
     today = datetime.now().strftime("%Y%m%d")
 
     # 获取美股龙头评估市场状态
@@ -827,18 +888,7 @@ def get_market_status() -> MarketStatus:
         rise_ratio = 0.5
 
     # 大盘状态判断
-    if rise_ratio >= 0.6:
-        direction = "LONG"
-        strength = 75
-        reasons = ["上涨家数占优", "市场活跃"]
-    elif rise_ratio <= 0.4:
-        direction = "SHORT"
-        strength = 25
-        reasons = ["下跌家数较多", "注意风险"]
-    else:
-        direction = "NEUTRAL"
-        strength = 50
-        reasons = ["多空均衡", "观望为主"]
+    direction, strength, reasons = _direction_from_ratio(rise_ratio)
 
     return MarketStatus(
         trade_date=today, is_trading=True, market_direction=direction, market_strength=strength, reasons=reasons

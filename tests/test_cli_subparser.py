@@ -28,6 +28,81 @@ def run_zt(*args: str) -> subprocess.CompletedProcess:
     )
 
 
+@pytest.mark.parametrize("options,selected", [([], "US"), (["--market", "US"], "US"), (["--market", "CN"], "CN")])
+def test_cli_binds_market_and_restores_calling_context(temp_db, monkeypatch, options, selected):
+    from modules import cli
+    from modules.database import get_db_path, get_market, market_context
+
+    observed = []
+    monkeypatch.setattr(cli, "cmd_watchlist", lambda args: observed.append((get_market(), get_db_path())))
+    monkeypatch.setattr(sys, "argv", ["zt", *options, "watchlist", "list"])
+    expected_path = get_db_path(selected)
+    with market_context("CN"):
+        cli.main()
+        assert get_market() == "CN"
+    assert observed == [(selected, expected_path)]
+    assert get_market() == "US"
+
+
+def test_cli_invalid_market_rejected_before_handler(temp_db, monkeypatch):
+    from modules import cli
+
+    calls = []
+    monkeypatch.setattr(cli, "cmd_watchlist", lambda args: calls.append(args))
+    monkeypatch.setattr(sys, "argv", ["zt", "--market", "EU", "watchlist", "list"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 2
+    assert not calls
+
+
+@pytest.mark.parametrize("entry", ["cli", "data_sync"])
+@pytest.mark.parametrize("action", ["init", "sync", "stk-factor"])
+def test_cn_legacy_sync_entry_refuses_unready_writes(entry, action, monkeypatch):
+    from modules import cli, data_sync
+    from modules.database import get_db_path, get_market, market_context
+
+    monkeypatch.setattr(data_sync, "DataSyncer", lambda: pytest.fail("不得初始化旧Tushare客户端"))
+    argv = (["zt", "--market", "CN", "sync", action] if entry == "cli"
+            else ["data-sync", action, "--market", "CN"])
+    monkeypatch.setattr(sys, "argv", argv)
+    with market_context("US"), pytest.raises(ValueError, match="CN.*尚未就绪"):
+        (cli if entry == "cli" else data_sync).main()
+    assert get_market() == "US"
+    assert not get_db_path("CN").exists()
+
+
+@pytest.mark.parametrize("entry", ["cli", "data_sync"])
+@pytest.mark.parametrize("single,skip", [(True, False), (True, True), (False, False)])
+def test_us_sync_entry_uses_workspace_adapter(temp_db, entry, single, skip, monkeypatch):
+    from modules import cli, data_sync
+    from modules.database import get_market, market_context
+    from api.services import sync_service
+
+    calls = []
+    monkeypatch.setattr(data_sync, "DataSyncer", lambda: pytest.fail("不得初始化旧Tushare客户端"))
+    monkeypatch.setattr(sync_service, "collect_us_hk_codes", lambda: ["AAPL.US", "00700.HK"])
+    monkeypatch.setattr(data_sync, "sync_workspace_stocks", lambda codes, days, mode: calls.append((get_market(), codes, mode, days)) or {})
+    argv = (["zt", "sync", "sync"] + (["AAPL.US"] if single else []) if entry == "cli"
+            else ["data-sync", "sync"] + (["--ts_code", "AAPL.US"] if single else []))
+    monkeypatch.setattr(sys, "argv", argv + (["--skip-indicators"] if skip else []))
+    with market_context("CN"):
+        (cli if entry == "cli" else data_sync).main()
+        assert get_market() == "CN"
+    assert calls == [("US", ["AAPL.US"] if single else ["AAPL.US", "00700.HK"],
+                      "daily_and_compute" if single and not skip else "daily", 730)]
+
+
+@pytest.mark.parametrize("entry", ["cli", "data_sync"])
+def test_us_sync_status_needs_no_tushare(temp_db, entry, monkeypatch, capsys):
+    from modules import cli, data_sync
+
+    monkeypatch.setattr(data_sync, "DataSyncer", lambda: pytest.fail("不得初始化旧Tushare客户端"))
+    monkeypatch.setattr(sys, "argv", ["zt", "sync", "status"] if entry == "cli" else ["data-sync", "status"])
+    (cli if entry == "cli" else data_sync).main()
+    assert "US" in capsys.readouterr().out
+
+
 # ==================== 顶层 subcommand ====================
 
 EXPECTED_TOP_COMMANDS = ["analyze", "screen", "score", "workflow", "diagnose", "watchlist", "sync"]

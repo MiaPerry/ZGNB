@@ -41,21 +41,31 @@ class BacktestTradeItem(BaseModel):
 
 
 class BacktestSummary(BaseModel):
+    """US 沿用既有数值；CN 不可计算的比例/收益统计为 null（原因见 metric_unavailable_reasons）"""
+
     total_trades: int = 0
-    win_rate: float = 0
-    profit_factor: float = 0
-    total_return: float = 0
-    max_drawdown: float = 0
-    sharpe_ratio: float = 0
-    avg_holding_days: float = 0
-    annualized_return: float = 0
-    win_count: int = 0
-    avg_pnl: float = 0
-    max_win: float = 0
-    max_loss: float = 0
+    win_rate: float | None = 0
+    profit_factor: float | None = 0
+    total_return: float | None = 0
+    max_drawdown: float | None = 0
+    sharpe_ratio: float | None = 0
+    avg_holding_days: float | None = 0
+    annualized_return: float | None = 0
+    win_count: int | None = 0
+    avg_pnl: float | None = 0
+    max_win: float | None = 0
+    max_loss: float | None = 0
 
 
-class BacktestResponse(BaseModel):
+class BacktestMarketMeta(BaseModel):
+    workspace_market: str = "US"
+    simulation_mode: str = "backtest"  # CN 固定 strategy_simulation
+    price_basis: str = "source"  # CN 固定 qfq（前复权参考价）
+    assumptions: list[str] = []
+    metric_unavailable_reasons: dict[str, str] = {}
+
+
+class BacktestResponse(BacktestMarketMeta):
     ts_code: str
     summary: BacktestSummary
     equity_curve: list[list] = []  # [[date, value], ...]
@@ -64,7 +74,7 @@ class BacktestResponse(BaseModel):
     data_date: str | None = None
 
 
-class PortfolioBacktestResponse(BaseModel):
+class PortfolioBacktestResponse(BacktestMarketMeta):
     summary: BacktestSummary
     equity_curve: list[list] = []
     trades: list[dict] = []

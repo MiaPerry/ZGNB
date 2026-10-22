@@ -3,7 +3,7 @@
 import os
 from contextlib import AbstractContextManager
 
-from .database import get_db_path
+from .database import get_db_path, get_market, MarketBinding
 
 
 class SyncBusyError(RuntimeError):
@@ -13,6 +13,14 @@ class SyncBusyError(RuntimeError):
 class MarketSyncLease(AbstractContextManager):
     def __init__(self, handle):
         self.handle = handle
+        self.binding = MarketBinding(get_market(), get_db_path())
+
+    def validate_current_database(self):
+        """借用已有任务锁时验证身份，借用方不得释放调用方持有的锁。"""
+        if self.handle.closed:
+            raise ValueError("行情任务锁已经释放")
+        if self.binding != MarketBinding(get_market(), get_db_path()):
+            raise ValueError("行情任务锁与当前数据库身份不一致")
 
     @staticmethod
     def _path():

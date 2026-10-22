@@ -2,23 +2,64 @@
 
 import logging
 from typing import Any
+from modules.database import cn_snapshot_read, get_market, get_db_path
+from modules.data_freshness import get_data_version
 
 logger = logging.getLogger(__name__)
 
 
+def get_asset_display(ts_code: str) -> dict[str, str]:
+    """CN 资产身份来自显式元数据，US 保留库内分类与标的币种。"""
+    import sqlite3
+    from modules.database import get_connection
+
+    if get_market() == 'CN':
+        with get_connection() as conn:
+            row = conn.execute('SELECT asset_type, currency FROM cn_asset_metadata WHERE ts_code=?', (ts_code,)).fetchone()
+        return dict(row) if row else {'asset_type': 'unknown', 'currency': 'CNY'}
+    try:
+        with get_connection() as conn:
+            row = conn.execute('SELECT market FROM stock_basic WHERE ts_code=?', (ts_code,)).fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    category = row[0] if row else None
+    return {'asset_type': 'index' if category == '美股指数' else 'stock' if category else 'unknown',
+            'currency': 'HKD' if ts_code.endswith('.HK') else 'USD'}
+
+
 def list_stocks(
-    market: str = "美股", q: str = "", industry: str | None = None,
+    market: str | None = None, q: str = "", industry: str | None = None,
     data_status: str = "all", sort_by: str = "ts_code", order: str = "asc",
     page: int = 1, page_size: int = 25,
 ) -> dict[str, Any]:
     """只读股票库：按各标的最近交易日取行情，不触发分析或同步。"""
-    from modules.database import get_connection
+    from fastapi import HTTPException
+    from modules.database import get_connection, get_market
+
+    workspace = get_market()
+    market = market or ("美股" if workspace == "US" else "全部A股")
+    with get_connection() as conn:
+        if workspace == "US":
+            available = {"美股", "港股", "美股指数"}
+        else:
+            available = {row[0] for row in conn.execute("SELECT DISTINCT market FROM stock_basic")}
+            available.add("全部A股")
+        if market not in available:
+            raise HTTPException(422, detail="股票分类不属于当前工作空间")
+    if workspace == "CN" and market == "全部A股":
+        # 指数身份以资产元数据为准，板块分类文本不可靠。
+        market_clause = ("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ') AND COALESCE(s.market, '') != 'A股指数' "
+                         "AND s.ts_code NOT IN (SELECT ts_code FROM cn_asset_metadata WHERE asset_type = 'index')")
+        market_params: list[Any] = []
+    else:
+        market_clause = "s.market = ?"
+        market_params = [market]
 
     # 排序仅使用白名单列名；用户输入均通过参数绑定，搜索通配符按字面量匹配。
     sort_column = {"ts_code": "ts_code", "pct_chg": "pct_chg", "vol": "vol"}[sort_by]
     direction = {"asc": "ASC", "desc": "DESC"}[order]
     where = ["1 = 1"]
-    params: list[Any] = [market]
+    params: list[Any] = list(market_params)
     if q.strip():
         escaped = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         where.append("(ts_code LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\')")
@@ -30,9 +71,11 @@ def list_stocks(
         where.append("data_status = ?")
         params.append(data_status)
     clause = " AND ".join(where)
-    catalog = """
+    identity = ("COALESCE((SELECT m.asset_type FROM cn_asset_metadata m WHERE m.ts_code=s.ts_code), 'unknown') AS asset_type, 'CNY' AS currency,"
+                if workspace == 'CN' else "CASE WHEN s.market='美股指数' THEN 'index' ELSE 'stock' END AS asset_type, CASE WHEN s.market='港股' THEN 'HKD' ELSE 'USD' END AS currency,")
+    catalog = f"""
         WITH catalog AS (
-            SELECT s.ts_code, COALESCE(NULLIF(s.name, ''), s.ts_code) AS name,
+            SELECT {identity} s.ts_code, COALESCE(NULLIF(s.name, ''), s.ts_code) AS name,
                    s.market, TRIM(COALESCE(s.industry, '')) AS industry,
                    CASE WHEN k.close > 0 THEN k.close END AS close,
                    CASE WHEN k.close > 0 THEN k.pct_chg END AS pct_chg,
@@ -48,7 +91,7 @@ def list_stocks(
             FROM stock_basic s
             LEFT JOIN daily_kline k ON k.ts_code = s.ts_code
                 AND k.trade_date = (SELECT MAX(d.trade_date) FROM daily_kline d WHERE d.ts_code = s.ts_code)
-            WHERE s.market = ?
+            WHERE {market_clause}
         )
     """
     with get_connection() as conn:
@@ -63,16 +106,18 @@ def list_stocks(
         ).fetchall()
         summary = conn.execute(
             catalog + "SELECT COUNT(*), MAX(CASE WHEN data_status = 'available' THEN trade_date END) FROM catalog",
-            (market,),
+            market_params,
         ).fetchone()
         industries = conn.execute(
-            "SELECT DISTINCT TRIM(COALESCE(industry, '')) FROM stock_basic WHERE market = ? ORDER BY 1",
-            (market,),
+            catalog + "SELECT DISTINCT industry FROM catalog ORDER BY 1", market_params,
         ).fetchall()
         markets = conn.execute("""
             SELECT market, COUNT(*) AS count FROM stock_basic
             WHERE market IN ('美股', '港股', '美股指数') GROUP BY market
             ORDER BY CASE market WHEN '美股' THEN 0 WHEN '港股' THEN 1 ELSE 2 END
+        """ if workspace == "US" else """
+            SELECT COALESCE(market, '') AS market, COUNT(*) AS count FROM stock_basic
+            WHERE ts_code LIKE '%.SH' OR ts_code LIKE '%.SZ' GROUP BY market ORDER BY market
         """).fetchall()
     return {
         "total": total, "page": page, "page_size": page_size,
@@ -82,6 +127,7 @@ def list_stocks(
     }
 
 
+@cn_snapshot_read
 def get_full_analysis(ts_code: str, days: int = 120) -> dict[str, Any]:
     """
     全量分析：指标 + 三波 + 麒麟会 + 战法信号 + 诊断 + 评分
@@ -153,9 +199,13 @@ def get_full_analysis(ts_code: str, days: int = 120) -> dict[str, Any]:
         "signals": _build_signals(signals),
         "score": _build_score(score),
         "diagnosis": _build_diagnosis(diagnosis),
+        **get_asset_display(ts_code),
+        "workspace_market": get_market(), "database_identity": str(get_db_path()),
+        "data_version": get_data_version(ts_code), "days": days,
     }
 
 
+@cn_snapshot_read
 def get_kline_chart_data(ts_code: str, days: int = 120) -> dict[str, Any]:
     """获取 K 线图表数据（ECharts 列式格式）"""
     from modules.indicators.data_layer import get_kline_data
@@ -170,17 +220,18 @@ def get_kline_chart_data(ts_code: str, days: int = 120) -> dict[str, Any]:
 
     # 多取历史数据用于指标计算（黄线需要 114 天 MA114）
     # 展示最近 days 天，但用更多历史数据计算指标
+    display = get_asset_display(ts_code)
     extra_days = max(days + 130, 250)
     all_klines = get_kline_data(ts_code, days=extra_days)
     if not all_klines:
-        return {"ts_code": ts_code, "dates": [], "ohlc": [], "volumes": [],
+        return {**display, "ts_code": ts_code, "dates": [], "ohlc": [], "volumes": [],
                 "pct_chgs": [], "overlays": {}, "signal_markers": [],
                 "kdj": {"k": [], "d": [], "j": []}, "macd": {"dif": [], "dea": [], "hist": []}}
 
     # 只取最近 days 天用于展示
     klines = all_klines[-days:]
     if not klines:
-        return {"ts_code": ts_code, "dates": [], "ohlc": [], "volumes": [],
+        return {**display, "ts_code": ts_code, "dates": [], "ohlc": [], "volumes": [],
                 "pct_chgs": [], "overlays": {}, "signal_markers": [],
                 "kdj": {"k": [], "d": [], "j": []}, "macd": {"dif": [], "dea": [], "hist": []}}
 
@@ -342,6 +393,7 @@ def get_kline_chart_data(ts_code: str, days: int = 120) -> dict[str, Any]:
         logger.warning("信号标注获取失败: %s", ts_code, exc_info=True)
 
     return {
+        **display,
         "ts_code": ts_code,
         "name": name,
         "dates": dates,
@@ -356,6 +408,7 @@ def get_kline_chart_data(ts_code: str, days: int = 120) -> dict[str, Any]:
     }
 
 
+@cn_snapshot_read
 def get_signals(ts_code: str, days: int = 120) -> list[dict]:
     """获取战法信号列表"""
     from modules.strategies import detect_all_strategies
@@ -364,6 +417,7 @@ def get_signals(ts_code: str, days: int = 120) -> list[dict]:
     return _build_signals(signals)
 
 
+@cn_snapshot_read
 def get_score(ts_code: str) -> dict:
     """获取综合评分"""
     from modules.screener import analyze_stock

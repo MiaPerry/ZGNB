@@ -16,21 +16,21 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 
 @pytest.fixture(autouse=True)
-def mock_env_for_tests():
-    """所有测试自动设置 mock 环境变量"""
+def mock_env_for_tests(monkeypatch):
+    """两市场均绑定临时路径；退出时恢复调用者环境，绝不触碰真实库。"""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
         env_vars = {
             "DATA_MODE": "websearch",
             "DB_PATH": db_path,
+            "CN_DB_PATH": os.path.join(tmpdir, "test_cn.db"),
             "DATA_DIR": tmpdir,
         }
-        # 清除可能影响测试的已有变量
-        for key in list(os.environ.keys()):
-            if key in ("DATA_MODE", "DB_PATH", "DATA_DIR", "TUSHARE_TOKEN"):
-                del os.environ[key]
-        os.environ.update(env_vars)
-        yield db_path
+        with monkeypatch.context() as patch:
+            patch.delenv("TUSHARE_TOKEN", raising=False)
+            for key, value in env_vars.items():
+                patch.setenv(key, value)
+            yield db_path
 
 
 @pytest.fixture

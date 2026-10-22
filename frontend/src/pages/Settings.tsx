@@ -1,23 +1,29 @@
 import { useQuery } from '@tanstack/react-query';
-import api from '../api/client';
+import api, { marketRequest } from '../api/client';
+import { useAppStore } from '../stores/appStore';
+import { marketKey } from '../lib/syncLinkage';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import ApiErrorState from '../components/ui/ApiErrorState';
 
 export default function Settings() {
+  const market = useAppStore((s) => s.currentMarket);
+  const initialized = useAppStore((s) => s.marketInitialized);
   const { data: health, isLoading: loadingHealth, isError: healthError, error: healthErr, refetch: refetchHealth } = useQuery({
-    queryKey: ['health'],
-    queryFn: async () => {
-      const { data } = await api.get('/system/health');
+    queryKey: marketKey(market, 'health'),
+    enabled: initialized,
+    queryFn: async ({ signal }) => {
+      const { data } = await api.get('/system/health', marketRequest(market, signal));
       return data;
     },
   });
 
   const { data: syncStatus, isLoading: loadingSync, isError: syncError, error: syncErr, refetch: refetchSync } = useQuery({
-    queryKey: ['sync-status'],
-    queryFn: async () => {
-      const { data } = await api.get('/system/sync/status');
+    queryKey: marketKey(market, 'sync-status'),
+    enabled: initialized,
+    queryFn: async ({ signal }) => {
+      const { data } = await api.get('/system/sync/status', marketRequest(market, signal));
       return data;
     },
   });

@@ -97,6 +97,40 @@ def test_export_failure_does_not_publish_partial_snapshot(tmp_path, monkeypatch)
     assert old.read_bytes() == b"old-backup"
 
 
+@pytest.mark.parametrize("market", [None, "US", "CN"])
+def test_export_cli_default_source_is_selected_market(temp_db, tmp_path, market, capsys):
+    import json
+    from modules.database import add_watchlist_item, get_db_path, get_market, init_database, market_context
+    from scripts.export_database import main
+
+    add_watchlist_item("AAPL.US")
+    with market_context("CN"):
+        init_database()
+        add_watchlist_item("600519.SH")
+        add_watchlist_item("000001.SZ")
+    output = tmp_path / "snapshot.db"
+    capsys.readouterr()
+    with market_context("CN"):
+        argv = ["--output", str(output)] + (["--market", market] if market else [])
+        assert main(argv) == 0
+        assert get_market() == "CN"
+    report = json.loads(capsys.readouterr().out)
+    selected = market or "US"
+    assert report["workspace_market"] == selected
+    assert report["source"] == str(get_db_path(selected))
+    assert report["tables"]["watchlist"] == (2 if selected == "CN" else 1)
+
+
+def test_export_cli_missing_cn_never_falls_back(temp_db, tmp_path):
+    from modules.database import get_db_path
+    from scripts.export_database import main
+
+    output = tmp_path / "snapshot.db"
+    assert main(["--market", "CN", "--output", str(output)]) == 1
+    assert not output.exists()
+    assert not get_db_path("CN").exists()
+
+
 def test_export_cli_reports_hash_and_nonzero_for_missing_source(tmp_path, capsys):
     import json
     from scripts.export_database import main

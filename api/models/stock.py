@@ -6,12 +6,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # ── 股票库 ──
 
-StockMarket = Literal["美股", "港股", "美股指数"]
+StockMarket = str  # 分类字典来自目标库，工作空间由X-Market独立指定。
 StockSort = Literal["ts_code", "pct_chg", "vol"]
 StockDataStatus = Literal["available", "missing"]
 
 
 class StockListItem(BaseModel):
+    asset_type: Literal['stock', 'index', 'unknown'] = 'unknown'
+    currency: Literal['CNY', 'USD', 'HKD'] = 'USD'
     ts_code: str
     name: str
     market: StockMarket
@@ -60,6 +62,7 @@ class StockImportItem(BaseModel):
 
 
 class StockImportSnapshot(BaseModel):
+    workspace_market: Literal["US", "CN"] = "US"
     task_id: str | None = None
     sequence: int = 0
     revision: int = 0
@@ -217,6 +220,11 @@ class KirinInfo(BaseModel):
 # ── 完整分析响应 ──
 
 class StockAnalysisResponse(BaseModel):
+    asset_type: Literal['stock', 'index', 'unknown'] = 'unknown'
+    currency: Literal['CNY', 'USD', 'HKD'] = 'USD'
+    workspace_market: Literal["US", "CN"] = "US"
+    data_version: str = ""
+    days: int = 120
     ts_code: str
     name: str = ""
     price: float = 0
@@ -271,6 +279,8 @@ class BrickSeries(BaseModel):
 
 
 class KlineChartResponse(BaseModel):
+    asset_type: Literal['stock', 'index', 'unknown'] = 'unknown'
+    currency: Literal['CNY', 'USD', 'HKD'] = 'USD'
     ts_code: str
     name: str = ""
     dates: list[str] = []

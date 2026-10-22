@@ -28,6 +28,18 @@ def test_batch_limit_applies_after_deduplication():
         normalize_codes(" ".join(f"S{i}" for i in range(51)))
 
 
+def test_normalize_cn_requires_standard_stock_codes(temp_db):
+    from api.services.stock_import_service import normalize_codes
+    from modules.database import init_database, market_context
+
+    init_database("CN")
+    with market_context("CN"):
+        assert normalize_codes("600519.sh, 000001.SZ 600519.SH") == ["600519.SH", "000001.SZ"]
+        for text in ("600519", "000300.SH", "830001.BJ", "AAPL.US"):
+            with pytest.raises(ValueError):
+                normalize_codes(text)
+
+
 def chart_payload(symbol="WULF", count=130):
     from datetime import datetime, timedelta, timezone
 
@@ -117,6 +129,148 @@ def test_import_sql_failure_rolls_back_basic_and_prices(temp_db, db_conn):
     assert db_conn.execute("SELECT COUNT(*) FROM stock_basic").fetchone()[0] == 0
 
 
+@pytest.mark.parametrize("module_name,getter_name", [
+    ("api.services.sync_service", "get_a_share_sync_service"),
+    ("api.services.stock_import_service", "get_stock_import_service"),
+])
+def test_service_registry_is_keyed_by_market_and_path(temp_db, tmp_path, monkeypatch, module_name, getter_name):
+    import importlib
+    from modules.database import market_context
+
+    module = importlib.import_module(module_name)
+    monkeypatch.setattr(module, "_services", {}, raising=False)
+    monkeypatch.setattr(module, "_service", None, raising=False)
+    getter = getattr(module, getter_name)
+    instances = []
+    try:
+        us = getter()
+        instances.append(us)
+        assert getter() is us
+        with market_context("CN"):
+            cn = getter()
+            instances.append(cn)
+            assert getter() is cn
+            assert cn is not us
+            assert cn.binding.market == "CN"
+        monkeypatch.setenv("CN_DB_PATH", str(tmp_path / "another-cn.db"))
+        with market_context("CN"):
+            other = getter()
+            instances.append(other)
+            assert other is not cn
+            assert other.binding.db_path == tmp_path / "another-cn.db"
+        assert getter() is us
+    finally:
+        for instance in set(instances):
+            instance._executor.shutdown(wait=True)
+
+
+def test_cn_import_registers_verified_metadata_then_uses_atomic_sync(temp_db, tmp_path):
+    from datetime import datetime
+    import pandas as pd
+    from api.services.stock_import_service import StockImportService
+    from modules import data_freshness, data_sync
+    from modules.database import get_connection, init_database, market_context
+    from tests.test_data_sync_extensions import _cn_daily_source
+
+    class Client:
+        def get_stock_basic(self, ts_code=None, list_status="L", raise_on_error=False):
+            if list_status != "L":
+                return pd.DataFrame()
+            return pd.DataFrame([{"ts_code": ts_code, "name": "贵州茅台", "area": "贵州",
+                                  "industry": "白酒", "market": "主板", "list_date": "20010827",
+                                  "is_hs": "N", "list_status": "L"}])
+
+    client, calls = Client(), []
+
+    def cn_sync(client_arg, code, start_date, end_date, *, lease):
+        with get_connection() as conn:
+            asset = dict(conn.execute("SELECT * FROM cn_asset_metadata WHERE ts_code=?", (code,)).fetchone())
+        assert asset["asset_type"] == "stock" and asset["metadata_status"] == "complete"
+        daily, factors = _cn_daily_source(code)
+        candidate = data_sync.build_cn_daily_candidate(code, daily, factors)
+        written = data_sync.publish_cn_daily_candidate(
+            candidate, data_freshness.get_data_version(code), lease=lease)
+        calls.append((client_arg, code, start_date, end_date))
+        return {"new_rows": len(candidate["bars"]), "indicator_rows": written}
+
+    init_database("CN")
+    service = StockImportService(
+        market="CN", cn_client=client, cn_sync=cn_sync, compute=lambda code: 0,
+        sleep=lambda _: None, now=lambda: datetime(2026, 9, 24, 10), backup_dir=tmp_path,
+    )
+    try:
+        task = service.submit("600519.SH")
+        assert service.wait_for_completion(30)
+        result = service.get_status(task["task_id"])
+        assert result["status"] == "completed" and result["success"] == 1
+        assert calls == [(client, "600519.SH", "20210924", "20260923")]
+        with market_context("CN"), get_connection() as conn:
+            assert tuple(conn.execute("SELECT name,market FROM stock_basic").fetchone()) == ("贵州茅台", "主板")
+            assert conn.execute("SELECT COUNT(*) FROM cn_daily_publication").fetchone()[0] == 1
+    finally:
+        service.shutdown()
+
+
+def test_cn_import_failure_removes_new_unpublished_registration(temp_db, tmp_path):
+    from datetime import datetime
+    import pandas as pd
+    from api.services.stock_import_service import StockImportService
+    from modules.database import get_connection, init_database, market_context
+
+    class Client:
+        def get_stock_basic(self, ts_code=None, list_status="L", raise_on_error=False):
+            if list_status != "L":
+                return pd.DataFrame()
+            return pd.DataFrame([{"ts_code": ts_code, "name": "测试股", "market": "主板",
+                                  "list_status": "L"}])
+
+    def fail(*args, **kwargs):
+        raise ConnectionError("测试网络故障")
+
+    init_database("CN")
+    service = StockImportService(
+        market="CN", cn_client=Client(), cn_sync=fail, sleep=lambda _: None,
+        now=lambda: datetime(2026, 9, 24, 10), backup_dir=tmp_path,
+    )
+    try:
+        task = service.submit("600519.SH")
+        assert service.wait_for_completion(30)
+        assert service.get_status(task["task_id"])["status"] == "failed"
+        with market_context("CN"), get_connection() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM cn_asset_metadata").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM stock_basic").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM daily_kline").fetchone()[0] == 0
+    finally:
+        service.shutdown()
+
+
+@pytest.mark.parametrize("bad_identity", [{"workspace_market": "CN"}, {"db_path": "other.db"}])
+def test_import_rejects_persisted_task_from_another_identity(import_service, bad_identity):
+    from modules.database import get_db_path
+
+    job = {"task_id": "foreign", "workspace_market": "US", "db_path": str(get_db_path()),
+           "status": "failed", "items": [{"ts_code": "WULF.US", "status": "failed"}]}
+    job.update(bad_identity)
+    import_service._save(job, create=True)
+    with pytest.raises(ValueError, match="归属"):
+        import_service.get_status("foreign")
+    with pytest.raises(ValueError, match="归属"):
+        import_service.retry("foreign")
+
+
+def test_import_retry_validates_persisted_codes(import_service, monkeypatch):
+    from modules.database import get_connection
+
+    job = {"task_id": "bad-code", "status": "failed", "start_date": "20210101", "end_date": "20260918",
+           "items": [{"ts_code": "600519.SH", "status": "failed"}]}
+    import_service._save(job, create=True)
+    monkeypatch.setattr(import_service, "_run", lambda job, lease: lease.__exit__())
+    with pytest.raises(ValueError, match="代码"):
+        import_service.retry("bad-code")
+    with get_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM sync_log WHERE data_type='stock_import'").fetchone()[0] == 1
+
+
 def test_market_lock_is_exclusive_and_released(temp_db):
     from modules.market_sync_lock import MarketSyncLease, SyncBusyError
 
@@ -192,6 +346,43 @@ def finished(service, text):
     first = service.submit(text)
     assert service.wait_for_completion(30)
     return service.get_status(first["task_id"])
+
+
+def test_import_service_pins_original_market_for_submit_worker_and_status(import_service, db_conn):
+    import threading
+    from modules.database import get_connection, get_market, init_database, market_context
+    from modules.market_sync_lock import MarketSyncLease
+
+    init_database("CN")
+    started, release = threading.Event(), threading.Event()
+    fetch = import_service.fetch
+    observed = []
+
+    def slow(*args):
+        observed.append(get_market())
+        started.set()
+        assert release.wait(5)
+        return fetch(*args)
+
+    import_service.fetch = slow
+    try:
+        with market_context("CN"), MarketSyncLease.acquire("cn-running"):
+            first = import_service.submit("WULF")
+            assert started.wait(5)
+            status = import_service.get_status(first["task_id"])
+            assert status["status"] == "running"
+            assert status["workspace_market"] == "US"
+            assert import_service.submit("WULF")["task_id"] == first["task_id"]
+            release.set()
+            assert import_service.wait_for_completion(10)
+            assert import_service.get_status(first["task_id"])["status"] == "completed"
+            with get_connection() as conn:
+                assert conn.execute("SELECT COUNT(*) FROM stock_basic").fetchone()[0] == 0
+                assert conn.execute("SELECT COUNT(*) FROM sync_log WHERE data_type='stock_import'").fetchone()[0] == 0
+        assert observed == ["US"]
+        assert db_conn.execute("SELECT ts_code FROM stock_basic").fetchone()[0] == "WULF.US"
+    finally:
+        release.set()
 
 
 def test_background_import_and_existing_skip(import_service, db_conn):

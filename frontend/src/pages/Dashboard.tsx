@@ -5,23 +5,29 @@ import { fetchWatchlist, scanWatchlist } from '../api/watchlist';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
+import { useAppStore, normalizeStockCode } from '../stores/appStore';
+import { marketKey } from '../lib/syncLinkage';
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const market = useAppStore((s) => s.currentMarket);
+  const initialized = useAppStore((s) => s.marketInitialized);
   const [searchCode, setSearchCode] = useState('');
+  const [searchError, setSearchError] = useState('');
 
   const { data: watchlist } = useQuery({
-    queryKey: ['watchlist'],
-    queryFn: fetchWatchlist,
+    queryKey: marketKey(market, 'watchlist'),
+    queryFn: ({ signal }) => fetchWatchlist(market, signal),
+    enabled: initialized,
   });
 
   const [scanStarted, setScanStarted] = useState(false);
 
   const { data: scanResult, isLoading: scanning, isFetching: scanUpdating, refetch: doScan } = useQuery({
-    queryKey: ['dashboard-scan'],
-    queryFn: scanWatchlist,
+    queryKey: marketKey(market, 'dashboard-scan'),
+    queryFn: ({ signal }) => scanWatchlist(market, signal),
     // 运行后才启用：同步完成的联动只会重跑已执行过的扫描，不会隐式启动
-    enabled: scanStarted,
+    enabled: initialized && scanStarted,
     staleTime: Infinity,
   });
 
@@ -29,13 +35,12 @@ export default function Dashboard() {
     e.preventDefault();
     const code = searchCode.trim().toUpperCase();
     if (!code) return;
-    let tsCode = code;
-    if (/^\d{6}$/.test(tsCode)) {
-      tsCode = tsCode.startsWith('6') ? `${tsCode}.SH` : `${tsCode}.SZ`;
-    } else if (/^[A-Z]{1,5}$/.test(tsCode)) {
-      tsCode = `${tsCode}.US`;
-    }
-    navigate(`/stock/${tsCode}`);
+    try {
+      const tsCode = normalizeStockCode(code, market);
+      useAppStore.getState().addSearchHistory(tsCode, market);
+      navigate(`/stock/${tsCode}`);
+      setSearchError('');
+    } catch (error) { setSearchError((error as Error).message); }
   };
 
   return (
@@ -50,7 +55,7 @@ export default function Dashboard() {
             type="text"
             value={searchCode}
             onChange={(e) => setSearchCode(e.target.value)}
-            placeholder="输入股票代码开始分析，如 AAPL"
+            placeholder={market === 'CN' ? 'A股代码，如 600519 / 300750.SZ' : '美股/港股代码，如 AAPL / 00700.HK'}
             className="w-full rounded-xl border border-border/60 bg-bg-secondary/80 backdrop-blur-md px-5 py-4 text-base text-text-primary placeholder-text-muted outline-none focus:border-accent-gold/70 focus:ring-4 focus:ring-accent-gold/10 transition-all shadow-xl"
           />
           <button
@@ -60,6 +65,7 @@ export default function Dashboard() {
             分析
           </button>
         </form>
+        {searchError && <p role="alert" className="mt-3 text-sm text-accent-red">{searchError}</p>}
       </div>
 
       {/* Quick Stats */}

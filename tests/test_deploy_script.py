@@ -21,6 +21,11 @@ def run_script(tmp_path, flags="", failure="", script=SCRIPT):
     harness.write_text(
         """$ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+# 原样收集脚本错误消息，避免宿主格式化按路径长度折行；脚本仍负责非零退出。
+function Write-Error {
+    param([string]$Message, [string]$ErrorAction)
+    [Console]::Error.WriteLine($Message)
+}
 function Record-Call($name, $arguments) {
     Add-Content -LiteralPath $env:TEST_COMMAND_LOG -Value ($name + ' ' + ($arguments -join ' '))
     $global:LASTEXITCODE = 0
@@ -62,6 +67,19 @@ def test_legacy_db_option_is_rejected_before_any_action(tmp_path):
     assert result.returncode != 0
     assert "DATA_IMPORT_DISABLED" in result.stderr + result.stdout
     assert calls == []
+
+
+@pytest.mark.parametrize("flags, marker", [
+    ("-Db", "DATA_IMPORT_DISABLED"),
+    ("-RemoteDir '/.'", "RemoteDir"),
+])
+def test_harness_captures_error_payload_without_host_wrapping(tmp_path, flags, marker):
+    result, calls = run_script(tmp_path, flags)
+    assert result.returncode != 0
+    assert calls == []
+    assert result.stderr.startswith(marker), result.stderr
+    assert "CategoryInfo" not in result.stderr
+    assert "\ufffd" not in result.stderr
 
 
 @pytest.mark.parametrize("failure", ["npm", "python", "scp"])

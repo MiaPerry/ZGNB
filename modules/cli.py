@@ -121,6 +121,11 @@ def _analyze_core(ts_code: str, days: int = 120) -> dict:
     }
 
 
+def _limit_up_text(count):
+    """涨停次数为 None 表示不可判定，不能显示为次数"""
+    return "涨停未知" if count is None else f"涨停{count}次"
+
+
 def cmd_analyze(args):
     """分析单只股票（指标 + 主力 + 战法 + 诊断 + 评分）"""
     core = _analyze_core(args.ts_code, args.days)
@@ -216,7 +221,9 @@ def cmd_analyze(args):
         if wave_data["stats"]:
             s = wave_data["stats"]
             print(f"    低点→当前: {s['low_price']:.1f}→{s['high_price']:.1f} 涨幅{s['gain_pct']:.1f}%")
-            print(f"    涨停{s['limit_up_count']}次 阳线占比{s['red_ratio'] * 100:.0f}% 日均{s['avg_daily_gain']:.2f}%")
+            print(
+                f"    {_limit_up_text(s['limit_up_count'])} 阳线占比{s['red_ratio'] * 100:.0f}% 日均{s['avg_daily_gain']:.2f}%"
+            )
     if kirin_data:
         print(f"  麒麟会: {kirin_data['stage']} (conf={kirin_data['confidence']}) → {kirin_data['operation']}")
         if kirin_data["sub_type"] != "未知":
@@ -443,63 +450,15 @@ def cmd_diagnose(args):
 
 def cmd_sync(args):
     """数据同步（init / sync / status / stk-factor）"""
-    import logging
-    from datetime import datetime, timedelta
-    from modules.data_sync import DataSyncer
-    from modules.database import init_database
+    from modules.data_sync import run_workspace_sync_command
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-    action = args.sync_action
-
-    if action == "init":
-        init_database()
-        print("数据库初始化完成")
-
-    elif action == "sync":
-        syncer = DataSyncer()
-        if args.ts_code:
-            # 同步单只股票
-            syncer.sync_daily_kline(args.ts_code)
-            if not args.skip_indicators:
-                print(f"正在同步指标缓存: {args.ts_code} ...")
-                syncer.sync_indicator_cache(args.ts_code, days=args.days)
-        else:
-            # 批量同步所有股票
-            syncer.sync_stock_basic()
-            syncer.sync_all_daily_kline(days=args.days)
-            if args.indicators and not args.skip_indicators:
-                print("正在批量同步指标缓存...")
-                syncer.sync_all_indicators()
-        print("同步完成")
-        print(syncer.get_sync_status())
-
-    elif action == "stk-factor":
-        syncer = DataSyncer()
-        if args.ts_code:
-            print(f"正在同步 Tushare 官方指标: {args.ts_code} ...")
-            start_date = (datetime.now() - timedelta(days=args.days)).strftime("%Y%m%d")
-            end_date = datetime.now().strftime("%Y%m%d")
-            count = syncer.sync_stk_factor(args.ts_code, start_date=start_date, end_date=end_date)
-            print(f"同步完成，{count} 条")
-        else:
-            print("正在批量同步 Tushare 官方指标...")
-            results = syncer.sync_all_stk_factor(days=args.days)
-            success = sum(1 for v in results.values() if v > 0)
-            print(f"批量同步完成，成功 {success}/{len(results)}")
-
-    elif action == "status":
-        syncer = DataSyncer()
-        status = syncer.get_sync_status()
-        print("=" * 50)
-        print(f"  数据库: {status.get('db_path', 'N/A')}")
-        print(f"  股票: {status.get('stock_count', 0)}")
-        print(f"  K线: {status.get('kline_count', 0)}")
-        print("=" * 50)
-        if status.get("sync_status"):
-            print("同步状态:")
-            for s in status["sync_status"]:
-                print(f"  {s['data_type']}: {s.get('last_date', 'N/A')} ({s.get('status', 'N/A')})")
+    return run_workspace_sync_command(
+        args.sync_action,
+        ts_code=getattr(args, "ts_code", None),
+        days=getattr(args, "days", 730),
+        indicators=getattr(args, "indicators", False),
+        skip_indicators=getattr(args, "skip_indicators", False),
+    )
 
 
 def cmd_self_optimize(args) -> int:
@@ -661,6 +620,7 @@ def main():
         """,
     )
 
+    parser.add_argument("--market", choices=["US", "CN"], default="US", help="工作空间市场（默认US，放在子命令前）")
     subparsers = parser.add_subparsers(dest="command", help="子命令", required=True)
 
     # ── analyze ──
@@ -777,7 +737,10 @@ def main():
         "track": cmd_track,
         "self-optimize": cmd_self_optimize,
     }
-    handlers[args.command](args)
+    from modules.database import market_context
+
+    with market_context(args.market):
+        handlers[args.command](args)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,9 @@ import time
 import logging
 from pathlib import Path
 from typing import Any
+from copy import deepcopy
+
+from modules.database import get_db_path, get_market, market_context
 
 logger = logging.getLogger(__name__)
 
@@ -194,11 +197,23 @@ def _build_user_prompt(analysis: dict[str, Any]) -> str:
     brick = indicators.get("brick", {})
     dmi = indicators.get("dmi", {})
 
+    market = get_market()
+    is_index = analysis.get("asset_type") == "index"
+    unit = "点" if is_index else ("CNY" if market == "CN" else "HKD" if ts_code.endswith(".HK") else "USD")
+    if is_index:
+        rules = "指数点位不复权；个股涨跌停、复权因子及成交数量规则不适用。"
+    elif market == "CN":
+        rules = "前复权参考价不是历史真实成交价；涨跌停仅按源端原始限价判定，缺资料时为未知。"
+    else:
+        rules = "使用当前库行情口径；不得套用A股涨跌停规则。"
+
     # 构建指标快照
     lines = [
-        f"请分析以下股票的最新量化数据，用 Z哥的风格给出点评：",
+        "请分析以下股票的最新量化数据，用 Z哥的风格给出点评：",
+        f"【市场】{market} | 单位 {unit} | 分析窗口 {analysis.get('days', 120)} 条日线",
+        f"【规则边界】{rules}",
         "",
-        f"【基本信息】{ts_code} {name} | 收盘 ¥{price} ({pct_chg:+.2f}%) | 日期 {trade_date}",
+        f"【基本信息】{ts_code} {name} | 收盘 {price} {unit} ({pct_chg:+.2f}%) | 日期 {trade_date}",
         "",
         "【技术指标快照】",
         f"- KDJ: K={kdj.get('k', 0):.2f} D={kdj.get('d', 0):.2f} J={kdj.get('j', 0):.2f}",
@@ -296,10 +311,21 @@ def _build_user_prompt(analysis: dict[str, Any]) -> str:
 
 def _get_cache_key(analysis: dict[str, Any], data_version: str) -> str:
     # 缓存键绑定标的数据版本：同日补齐指标后手动生成不得命中旧输入的点评
-    return f"{analysis.get('ts_code', '')}:{analysis.get('trade_date', '')}:{data_version}"
+    return repr((get_market(), str(get_db_path()), analysis.get("ts_code", ""),
+                 analysis.get("start_date", ""), analysis.get("trade_date", ""),
+                 analysis.get("days", 120), data_version))
 
 
-def generate_commentary(analysis: dict[str, Any]) -> dict[str, Any]:
+def generate_commentary(analysis: dict[str, Any], *, days: int | None = None) -> dict[str, Any]:
+    """捕获当前库身份和分析输入，付费调用中不重读或替换已冻结的数据版本。"""
+    frozen = deepcopy(analysis)
+    if days is not None:
+        frozen["days"] = days
+    with market_context(get_market(), get_db_path()):
+        return _generate_commentary(frozen)
+
+
+def _generate_commentary(analysis: dict[str, Any]) -> dict[str, Any]:
     """
     生成 Z哥点评
 
@@ -309,7 +335,7 @@ def generate_commentary(analysis: dict[str, Any]) -> dict[str, Any]:
     ts_code = analysis.get("ts_code", "")
     try:
         from modules.data_freshness import get_data_version
-        data_version = get_data_version(ts_code)
+        data_version = analysis.get("data_version") or get_data_version(ts_code)
     except Exception:
         data_version = ""
     cache_key = _get_cache_key(analysis, data_version)

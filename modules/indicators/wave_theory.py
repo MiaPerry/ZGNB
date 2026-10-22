@@ -5,7 +5,7 @@
 核心：建仓波 → 拉升波 → 冲刺波
 """
 
-from .core import DailyData
+from .core import LIMIT_UP_UNKNOWN_REASON, DailyData, limit_up_unknown
 
 
 def _find_recent_low(klines: list[DailyData], window: int = 5) -> tuple[int, float]:
@@ -39,14 +39,16 @@ def _find_recent_low(klines: list[DailyData], window: int = 5) -> tuple[int, flo
     return min_idx, klines[min_idx].low
 
 
-def _count_limit_up(klines: list[DailyData], start_idx: int) -> int:
+def _count_limit_up(klines: list[DailyData], start_idx: int) -> int | None:
     """统计从 start_idx 到今日的涨停/大涨次数
 
-    A股：涨停 = pct_chg >= 9.9%（10%涨跌停限制）
+    A股：需源端涨跌停价格，缺失时返回 None（不可判定）
     美股：大涨 = pct_chg >= 5%（无涨跌停限制，用5%作为强势信号）
     """
+    if klines and limit_up_unknown(klines[0].ts_code):
+        return None
     # 根据代码后缀判断市场，确定阈值
-    threshold = 9.9  # A股默认
+    threshold = 9.9
     if klines and klines[0].ts_code.endswith(".US"):
         threshold = 5.0  # 美股无涨跌停，用5%作为大涨信号
 
@@ -90,7 +92,7 @@ def detect_three_waves(klines: list[DailyData]) -> dict:
     拉升波：涨幅 > 50% 或 20 日涨幅 > 30%，涨停 ≥2 次，快速脱离
     冲刺波：涨幅 > 100%，频繁涨停，高位加速
 
-    注意：涨停阈值自动适配市场（A股9.9%，美股5%）
+    注意：涨停阈值自动适配市场（美股5%）；A股缺源端限价时涨停条件不参与评分
 
     返回：
     {
@@ -100,7 +102,7 @@ def detect_three_waves(klines: list[DailyData]) -> dict:
             'low_price': float,
             'high_price': float,
             'gain_pct': float,
-            'limit_up_count': int,
+            'limit_up_count': int | None,  # None = 不可判定，附 limit_up_unknown_reason
             'red_ratio': float,
             'avg_daily_gain': float,
             'gain_20day': float,
@@ -147,6 +149,9 @@ def detect_three_waves(klines: list[DailyData]) -> dict:
         "gain_20day": round(gain_20day, 2),
         "days_from_low": days_from_low,
     }
+    limit_known = limit_up_count is not None
+    if not limit_known:
+        stats["limit_up_unknown_reason"] = LIMIT_UP_UNKNOWN_REASON
     result["stats"] = stats
 
     # ========== 冲刺波判断 ==========
@@ -154,7 +159,7 @@ def detect_three_waves(klines: list[DailyData]) -> dict:
     sprint_score = 0
     if gain_pct > 100:
         sprint_score += 40
-    if limit_up_count >= 3:
+    if limit_known and limit_up_count >= 3:
         sprint_score += 30
     if gain_20day > 30:
         sprint_score += 20
@@ -178,9 +183,9 @@ def detect_three_waves(klines: list[DailyData]) -> dict:
         pull_score += 25
     elif gain_20day > 20:
         pull_score += 15
-    if limit_up_count >= 2:
+    if limit_known and limit_up_count >= 2:
         pull_score += 25
-    elif limit_up_count >= 1:
+    elif limit_known and limit_up_count >= 1:
         pull_score += 10
     if avg_daily_gain > 1.5:
         pull_score += 15
@@ -200,7 +205,7 @@ def detect_three_waves(klines: list[DailyData]) -> dict:
         build_score += 20
     elif 50 < gain_pct <= 60:
         build_score += 15
-    if limit_up_count <= 1:
+    if limit_known and limit_up_count <= 1:
         build_score += 25
     if red_ratio > 0.6:
         build_score += 20

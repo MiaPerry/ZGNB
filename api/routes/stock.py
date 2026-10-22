@@ -16,6 +16,7 @@ from api.models.stock import (
 )
 from api.services import stock_service
 from api.services.stock_import_service import get_stock_import_service
+from api.services.sync_service import SyncConfigError
 from modules.market_sync_lock import SyncBusyError
 
 router = APIRouter()
@@ -23,7 +24,7 @@ router = APIRouter()
 
 @router.get("/list", response_model=StockListResponse)
 def list_stocks(
-    market: StockMarket = "美股",
+    market: StockMarket | None = Query(default=None, max_length=100),
     q: str = Query(default="", max_length=100),
     industry: str | None = Query(default=None, max_length=100),
     data_status: Literal["all", "available", "missing"] = "all",
@@ -44,6 +45,8 @@ def _import_call(action):
         return action()
     except SyncBusyError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except SyncConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="股票添加任务不存在") from exc
     except ValueError as exc:

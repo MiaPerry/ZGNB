@@ -5,6 +5,7 @@
 from datetime import datetime, timedelta
 
 from modules.indicators import DailyData
+from modules.indicators.core import LIMIT_UP_UNKNOWN_REASON
 from modules.indicators.wave_theory import (
     detect_three_waves,
     classify_wave_for_b1,
@@ -13,7 +14,9 @@ from modules.indicators.wave_theory import (
 )
 
 
-def _make_klines(n, start_price=100.0, daily_pct=0.5, vol_base=10000, limit_up_days=None, noise=0.0):
+def _make_klines(
+    n, start_price=100.0, daily_pct=0.5, vol_base=10000, limit_up_days=None, noise=0.0, ts_code="00700.HK"
+):
     """工厂函数：生成 DailyData K线序列"""
     klines = []
     price = start_price
@@ -34,7 +37,7 @@ def _make_klines(n, start_price=100.0, daily_pct=0.5, vol_base=10000, limit_up_d
         vol = vol_base * (1 + i * 0.005)
 
         k = DailyData(
-            ts_code="000001.SZ",
+            ts_code=ts_code,
             trade_date=date_str,
             open=prev_price * 0.998,
             high=price * 1.01,
@@ -89,6 +92,25 @@ class TestCountLimitUp:
     def test_with_limit_up(self):
         klines = _make_klines(30, daily_pct=1.0, limit_up_days=[5, 10, 15])
         assert _count_limit_up(klines, 0) == 3
+
+    def test_cn_limit_up_is_unknown_not_zero(self):
+        klines = _make_klines(30, daily_pct=1.0, limit_up_days=[5, 10, 15], ts_code="688981.SH")
+        assert _count_limit_up(klines, 0) is None
+
+
+class TestCnLimitUpUnknown:
+    def test_cn_build_wave_skips_limit_up_condition(self):
+        result = detect_three_waves(_make_klines(60, daily_pct=0.6, ts_code="000001.SZ"))
+        assert result["stats"]["limit_up_count"] is None
+        assert result["stats"]["limit_up_unknown_reason"] == LIMIT_UP_UNKNOWN_REASON
+        assert result["wave"] == "建仓波"
+        assert result["confidence"] == 0.75
+
+    def test_hk_build_wave_keeps_limit_up_condition(self):
+        result = detect_three_waves(_make_klines(60, daily_pct=0.6))
+        assert result["stats"]["limit_up_count"] == 0
+        assert "limit_up_unknown_reason" not in result["stats"]
+        assert result["confidence"] == 1.0
 
 
 class TestDetectThreeWaves:

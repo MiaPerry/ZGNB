@@ -228,6 +228,74 @@ class TestApiMethods:
             assert client.check_connection() is False
 
 
+# ==================== CN核心接口契约 ====================
+
+
+@pytest.mark.parametrize("method,endpoint,args,kwargs,params", [
+    ("get_raw_daily", "daily", ("600519.SH", "20210101", "20260922"), {},
+     {"ts_code": "600519.SH", "start_date": "20210101", "end_date": "20260922"}),
+    ("get_adj_factor", "adj_factor", ("600519.SH", "20210101", "20260922"), {},
+     {"ts_code": "600519.SH", "start_date": "20210101", "end_date": "20260922"}),
+    ("get_index_weight", "index_weight", ("20260901", "20260922"), {},
+     {"index_code": "399300.SZ", "start_date": "20260901", "end_date": "20260922"}),
+    ("get_stk_limit", "stk_limit", ("600519.SH", "20210101", "20260922"), {},
+     {"ts_code": "600519.SH", "start_date": "20210101", "end_date": "20260922"}),
+    ("get_index_daily", "index_daily", ("000300.SH", "20210101", "20260922"), {"raise_on_error": True},
+     {"ts_code": "000300.SH", "start_date": "20210101", "end_date": "20260922"}),
+    ("get_stock_basic", "stock_basic", (), {"list_status": "D", "raise_on_error": True},
+     {"list_status": "D"}),
+    ("get_trade_cal", "trade_cal", (), {"start_date": "20210101", "end_date": "20260922", "raise_on_error": True},
+     {"exchange": "SSE", "start_date": "20210101", "end_date": "20260922"}),
+])
+def test_cn_interfaces_use_configured_sdk_and_limiter(monkeypatch, method, endpoint, args, kwargs, params):
+    from modules import tushare_client as tc
+
+    client = tc.TushareClient.__new__(tc.TushareClient)
+    client._pro = MagicMock()
+    expected = pd.DataFrame({"trade_date": ["20260922"]})
+    getattr(client._pro, endpoint).return_value = expected
+    limiter = MagicMock()
+    monkeypatch.setattr(client, "_rate_limit", limiter)
+    with patch.object(tc.ts, "pro_bar", side_effect=AssertionError("CN原始日线不得使用pro_bar复权")):
+        assert getattr(client, method)(*args, **kwargs) is expected
+    getattr(client._pro, endpoint).assert_called_once_with(**params)
+    limiter.assert_called_once_with()
+
+
+@pytest.mark.parametrize("endpoint,method,args,kwargs", [
+    ("daily", "get_raw_daily", ("600519.SH", "20210101", "20260922"), {}),
+    ("adj_factor", "get_adj_factor", ("600519.SH", "20210101", "20260922"), {}),
+    ("index_weight", "get_index_weight", ("20260901", "20260922"), {}),
+    ("stk_limit", "get_stk_limit", ("600519.SH", "20210101", "20260922"), {}),
+    ("index_daily", "get_index_daily", ("000300.SH", "20210101", "20260922"), {"raise_on_error": True}),
+    ("stock_basic", "get_stock_basic", (), {"raise_on_error": True}),
+    ("trade_cal", "get_trade_cal", (), {"raise_on_error": True}),
+])
+def test_cn_interfaces_do_not_swallow_errors(monkeypatch, endpoint, method, args, kwargs):
+    from modules import tushare_client as tc
+
+    client = tc.TushareClient.__new__(tc.TushareClient)
+    client._pro = MagicMock()
+    getattr(client._pro, endpoint).side_effect = RuntimeError("权限不足 token=private-value")
+    monkeypatch.setattr(client, "_rate_limit", lambda: None)
+    with pytest.raises(tc.TushareDataError, match=endpoint) as error:
+        getattr(client, method)(*args, **kwargs)
+    assert error.value.kind == "auth"
+    assert "private-value" not in str(error.value)
+
+
+@pytest.mark.parametrize("response", [None, [], {"error": "failed"}])
+def test_cn_invalid_response_is_not_empty_success(monkeypatch, response):
+    from modules import tushare_client as tc
+
+    client = tc.TushareClient.__new__(tc.TushareClient)
+    client._pro = MagicMock()
+    client._pro.daily.return_value = response
+    monkeypatch.setattr(client, "_rate_limit", lambda: None)
+    with pytest.raises(tc.TushareDataError, match="daily"):
+        client.get_raw_daily("600519.SH", "20210101", "20260922")
+
+
 # ==================== 模块级常量 ====================
 
 

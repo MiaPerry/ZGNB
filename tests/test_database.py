@@ -5,6 +5,81 @@ database.py 单元测试
 import pytest
 
 
+class TestMarketDatabase:
+    """市场上下文不修改全局配置，连接和个人数据均按库隔离。"""
+
+    def test_fixture_cn_path_is_also_temporary(self, mock_env_for_tests):
+        from pathlib import Path
+        from modules.database import get_db_path
+
+        assert get_db_path("CN").parent == Path(mock_env_for_tests).parent
+
+    def test_two_markets_use_independent_databases(self, temp_db, tmp_path, monkeypatch):
+        from modules.database import get_connection, get_market, init_database, market_context
+
+        cn = tmp_path / "cn.db"
+        monkeypatch.setenv("CN_DB_PATH", str(cn))
+        init_database(market="CN")
+        assert get_market() == "US"
+        with market_context("CN"):
+            assert get_market() == "CN"
+            with get_connection() as conn:
+                conn.execute("INSERT INTO watchlist(ts_code, name) VALUES (?, ?)", ("600519.SH", "CN"))
+        assert get_market() == "US"
+        with get_connection() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM watchlist").fetchone()[0] == 0
+        with get_connection(market="CN") as conn:
+            assert conn.execute("SELECT name FROM watchlist").fetchone()[0] == "CN"
+
+    def test_cn_rollback_and_explicit_initialization_path(self, temp_db, capsys):
+        from modules.database import get_connection, get_db_path, init_database
+
+        capsys.readouterr()
+        init_database("CN")
+        assert str(get_db_path("CN")) in capsys.readouterr().out
+        with pytest.raises(RuntimeError):
+            with get_connection("CN") as conn:
+                conn.execute("INSERT INTO watchlist(ts_code,name) VALUES ('600519.SH','回滚')")
+                raise RuntimeError("候选事务失败")
+        for market in ("US", "CN"):
+            with get_connection(market) as conn:
+                assert conn.execute("SELECT COUNT(*) FROM watchlist").fetchone()[0] == 0
+
+    def test_uninitialized_cn_never_creates_or_falls_back(self, tmp_path, monkeypatch):
+        from modules.database import MarketUnavailableError, get_connection
+
+        cn = tmp_path / "missing" / "cn.db"
+        monkeypatch.setenv("CN_DB_PATH", str(cn))
+        with pytest.raises(MarketUnavailableError):
+            with get_connection(market="CN"):
+                pytest.fail("未初始化库不能返回连接")
+        assert not cn.exists()
+        assert not cn.parent.exists()
+
+    def test_conflicting_paths_and_invalid_market_rejected(self, temp_db, monkeypatch):
+        from modules.database import get_db_path, market_context
+
+        monkeypatch.setenv("CN_DB_PATH", str(temp_db))
+        with pytest.raises(ValueError, match="路径"):
+            get_db_path("CN")
+        with pytest.raises(ValueError, match="市场"):
+            with market_context("HK"):
+                pytest.fail("HK是库内分类而非工作空间")
+
+    def test_context_restores_after_error_and_pins_path(self, temp_db, tmp_path, monkeypatch):
+        from modules.database import get_db_path, get_market, market_context
+
+        cn = tmp_path / "cn.db"
+        monkeypatch.setenv("CN_DB_PATH", str(cn))
+        with pytest.raises(RuntimeError):
+            with market_context("CN"):
+                monkeypatch.setenv("CN_DB_PATH", str(tmp_path / "other.db"))
+                assert get_db_path() == cn
+                raise RuntimeError("模拟任务异常")
+        assert get_market() == "US"
+        assert str(get_db_path()) == temp_db
+
+
 class TestGetDbPath:
     """数据库路径解析测试"""
 

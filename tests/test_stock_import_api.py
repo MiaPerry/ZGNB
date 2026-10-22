@@ -16,9 +16,12 @@ def client(import_service, monkeypatch):
 
 
 def test_import_api_and_persistent_progress(client, import_service):
-    assert client.get("/api/v1/stock/imports/latest").json()["status"] == "idle"
+    idle = client.get("/api/v1/stock/imports/latest").json()
+    assert idle["status"] == "idle"
+    assert idle["workspace_market"] == "US"
     result = client.post("/api/v1/stock/imports", json={"codes": "WULF,IREN"})
     assert result.status_code == 202
+    assert result.json()["workspace_market"] == "US"
     task_id = result.json()["task_id"]
     sequence, revision = result.json()["sequence"], result.json()["revision"]
     assert sequence > 0
@@ -26,6 +29,7 @@ def test_import_api_and_persistent_progress(client, import_service):
     result = client.get(f"/api/v1/stock/imports/{task_id}")
     assert result.status_code == 200
     assert result.json()["success"] == 2
+    assert result.json()["workspace_market"] == "US"
     assert result.json()["sequence"] == sequence
     assert result.json()["revision"] > revision
     assert "owned" not in result.json()["items"][0]
@@ -70,6 +74,48 @@ def test_all_web_sync_entrypoints_respect_lock(client):
         assert client.post("/api/v1/stock/imports", json={"codes": "WULF"}).status_code == 409
         assert client.post("/api/v1/system/sync/batch").status_code == 409
         assert client.post("/api/v1/system/sync/WULF.US").status_code == 409
+
+
+def test_cn_import_status_preserves_market(temp_db, monkeypatch):
+    from api.main import app
+    from api.routes import stock
+    from api.services.stock_import_service import StockImportService
+    from modules.database import init_database
+
+    init_database("CN")
+    service = StockImportService(market="CN")
+    monkeypatch.setattr(stock, "get_stock_import_service", lambda: service)
+    try:
+        with TestClient(app) as client:
+            response = client.get("/api/v1/stock/imports/latest", headers={"X-Market": "CN"})
+        assert response.status_code == 200
+        assert response.json()["workspace_market"] == "CN"
+    finally:
+        service.shutdown()
+
+
+def test_cn_import_api_accepts_only_standard_cn_codes(temp_db, monkeypatch):
+    from api.main import app
+    from api.routes import stock
+    from api.services.stock_import_service import StockImportService
+    from modules.database import init_database
+
+    init_database("CN")
+    service = StockImportService(market="CN")
+    monkeypatch.setattr(stock, "get_stock_import_service", lambda: service)
+    monkeypatch.setattr(service, "_run", lambda job, lease: lease.__exit__())
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.post("/api/v1/stock/imports", headers={"X-Market": "CN"},
+                                   json={"codes": "600519.SH"})
+            invalid = client.post("/api/v1/stock/imports", headers={"X-Market": "CN"},
+                                  json={"codes": "WULF"})
+        assert response.status_code == 202
+        assert response.json()["workspace_market"] == "CN"
+        assert response.json()["items"][0]["ts_code"] == "600519.SH"
+        assert invalid.status_code == 422
+    finally:
+        service.shutdown()
 
 
 def test_list_distinguishes_pending_indicators(client, import_service):

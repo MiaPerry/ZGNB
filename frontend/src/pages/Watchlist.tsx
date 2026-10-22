@@ -7,43 +7,55 @@ import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
 import ApiErrorState from '../components/ui/ApiErrorState';
+import { useAppStore, normalizeStockCode } from '../stores/appStore';
+import { apiErrorMessage } from '../api/client';
+import type { WorkspaceMarket } from '../stores/appStore';
+import { marketKey, submittedDraftMatches } from '../lib/syncLinkage';
+import { useMarketDraft } from '../hooks/useMarketDraft';
 
 export default function Watchlist() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [newCode, setNewCode] = useState('');
-  const [newTags, setNewTags] = useState('');
+  const market = useAppStore((s) => s.currentMarket);
+  const initialized = useAppStore((s) => s.marketInitialized);
+  const [draft, setDraft] = useState({ code: '', tags: '' });
+  const { code: newCode, tags: newTags } = draft;
 
   const { data: watchlist, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ['watchlist'],
-    queryFn: fetchWatchlist,
+    queryKey: marketKey(market, 'watchlist'),
+    queryFn: ({ signal }) => fetchWatchlist(market, signal),
+    enabled: initialized,
   });
 
   const [scanStarted, setScanStarted] = useState(false);
 
   const { data: scanResult, isFetching: scanUpdating, refetch: refetchScan } = useQuery({
-    queryKey: ['watchlist-scan'],
-    queryFn: scanWatchlist,
+    queryKey: marketKey(market, 'watchlist-scan'),
+    queryFn: ({ signal }) => scanWatchlist(market, signal),
     // 运行后才启用：同步完成的联动只会重跑已执行过的扫描，不会隐式启动
-    enabled: scanStarted,
+    enabled: initialized && scanStarted,
     staleTime: Infinity,
   });
 
   const addMutation = useMutation({
-    mutationFn: (code: string) => addToWatchlist(code, newTags),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['watchlist'] });
-      queryClient.invalidateQueries({ queryKey: ['stock', 'list'] });
-      setNewCode('');
-      setNewTags('');
+    mutationFn: (request: { market: WorkspaceMarket; code: string; tags: string }) => addToWatchlist(request.market, normalizeStockCode(request.code, request.market), request.tags),
+    onSuccess: (_data, request) => {
+      void queryClient.invalidateQueries({ queryKey: marketKey(request.market, 'watchlist') });
+      void queryClient.invalidateQueries({ queryKey: marketKey(request.market, 'stock', 'list') });
+      setDraft((current) => submittedDraftMatches(
+        useAppStore.getState().currentMarket, request.market,
+        [current.code, current.tags], [request.code, request.tags],
+      ) ? { code: '', tags: '' } : current);
     },
   });
 
+  useMarketDraft(Boolean(newCode.trim() || newTags.trim()) && !(addMutation.isPending && addMutation.variables?.market === market && addMutation.variables.code === newCode && addMutation.variables.tags === newTags));
+
   const removeMutation = useMutation({
-    mutationFn: removeFromWatchlist,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['watchlist'] });
-      queryClient.invalidateQueries({ queryKey: ['stock', 'list'] });
+    mutationFn: (request: { market: WorkspaceMarket; code: string }) => removeFromWatchlist(request.market, request.code),
+    onSuccess: (_data, request) => {
+      void queryClient.invalidateQueries({ queryKey: marketKey(request.market, 'watchlist') });
+      void queryClient.invalidateQueries({ queryKey: marketKey(request.market, 'stock', 'list') });
     },
   });
 
@@ -63,7 +75,7 @@ export default function Watchlist() {
   if (isError) {
     return (
       <ApiErrorState
-        message={(error as Error)?.message || '加载自选股失败'}
+        message={apiErrorMessage(error)}
         onRetry={() => refetch()}
       />
     );
@@ -84,21 +96,24 @@ export default function Watchlist() {
           <input
             type="text"
             value={newCode}
-            onChange={(e) => setNewCode(e.target.value)}
-            placeholder="股票代码，如 AAPL.US"
+            onChange={(e) => setDraft({ ...draft, code: e.target.value })}
+            placeholder={market === 'CN' ? 'A股代码，如 600519 / 300750.SZ' : '股票代码，如 AAPL / 00700.HK'}
             className="min-w-0 flex-1 basis-48 rounded border border-border bg-bg-primary px-3 py-1.5 text-sm text-text-primary placeholder-text-muted outline-none focus:border-accent-gold"
           />
           <input
             type="text"
             value={newTags}
-            onChange={(e) => setNewTags(e.target.value)}
+            onChange={(e) => setDraft({ ...draft, tags: e.target.value })}
             placeholder="标签（逗号分隔）"
             className="w-48 rounded border border-border bg-bg-primary px-3 py-1.5 text-sm text-text-primary placeholder-text-muted outline-none focus:border-accent-gold"
           />
-          <Button onClick={() => addMutation.mutate(newCode)} disabled={!newCode.trim()} className="shrink-0">
+          <Button onClick={() => addMutation.mutate({ market, code: newCode, tags: newTags })} disabled={!initialized || !newCode.trim() || addMutation.isPending} className="shrink-0">
             添加
           </Button>
         </div>
+        {addMutation.variables?.market === market && addMutation.isError && <p role="alert" className="mt-2 text-xs text-accent-red">添加自选失败：{apiErrorMessage(addMutation.error)}</p>}
+        {addMutation.variables?.market === market && addMutation.isSuccess && <p role="status" className="mt-2 text-xs text-accent-green">已加入当前市场自选</p>}
+        {removeMutation.variables?.market === market && removeMutation.isError && <p role="alert" className="mt-2 text-xs text-accent-red">删除自选失败：{apiErrorMessage(removeMutation.error)}</p>}
       </Card>
 
       {/* Scan Results */}
@@ -161,7 +176,7 @@ export default function Watchlist() {
                         分析
                       </button>
                       <button
-                        onClick={() => removeMutation.mutate(item.ts_code)}
+                        onClick={() => removeMutation.mutate({ market, code: item.ts_code })}
                         className="text-xs text-accent-red hover:underline"
                       >
                         删除

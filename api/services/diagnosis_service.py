@@ -1,10 +1,12 @@
 """持仓诊断服务"""
 
 import logging
+from modules.database import cn_snapshot_read
 
 logger = logging.getLogger(__name__)
 
 
+@cn_snapshot_read
 def diagnose(ts_code: str, days: int = 120) -> dict:
     """对单只股票进行完整诊断"""
     from modules.portfolio_diagnosis import diagnose_stock

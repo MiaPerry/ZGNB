@@ -1,4 +1,6 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useMarketDraft } from '../../hooks/useMarketDraft';
+import { useAppStore } from '../../stores/appStore';
 import Button from '../ui/Button';
 import type { useStockImport } from '../../hooks/useStockImport';
 import { canRetryImport, IMPORT_LABELS } from '../../lib/stockImportTask';
@@ -8,7 +10,10 @@ const dateLabel = (date: string | null) => date ? `${date.slice(0, 4)}-${date.sl
 type Props = { open: boolean; onClose: () => void; task: ReturnType<typeof useStockImport> };
 
 export default function StockImportDialog({ open, onClose, task }: Props) {
+  const market = useAppStore((s) => s.currentMarket);
   const dialog = useRef<HTMLDialogElement>(null);
+  const [codes, setCodes] = useState('');
+  useMarketDraft(Boolean(codes.trim()));
   useEffect(() => {
     const element = dialog.current;
     if (!element) return;
@@ -30,19 +35,19 @@ export default function StockImportDialog({ open, onClose, task }: Props) {
           <circle cx="12" cy="12" r="9" /><path d="M12 7v6m0 3v1" />
         </svg>
         <div className="space-y-1">
-          <p>仅支持普通美股（不含 ETF、指数、港股）。单只或批量最多 50 个去重代码，用逗号、空格或换行分隔。</p>
-          <p>默认从五年前或库内普通美股最早日期中较早者开始下载。实际历史以数据源为准，新上市股票可能不足五年；价格为日线收盘价，非实时行情。</p>
+          <p>{market === 'CN' ? '仅支持普通 A股标准代码（.SH / .SZ），不含指数、ETF、港股。' : '仅支持普通美股（不含 ETF、指数、港股）。'}单只或批量最多 50 个去重代码，用逗号、空格或换行分隔。</p>
+          <p>{market === 'CN' ? '新添加股票默认下载近五年历史，个股价格为前复权参考价。' : '默认从五年前或库内普通美股最早日期中较早者开始下载。'}实际历史以数据源为准，新上市股票可能不足五年；价格为日线收盘价，非实时行情。</p>
           <p>已存在股票跳过，不覆盖历史。行情与全部指标齐备后才计为成功；不会自动加入自选、点评或回测。</p>
           <p>任务在后台执行，关闭不取消；重新打开可继续查看进度。添加期间不能同时更新行情。</p>
         </div>
       </div>
       <form className="mt-4 space-y-3" onSubmit={(event) => {
         event.preventDefault();
-        if (!busy) task.start(String(new FormData(event.currentTarget).get('codes') ?? ''));
+        if (!busy) { task.start(codes); setCodes(''); }
       }}>
-        <label htmlFor="stock-import-codes" className="block text-sm">美股代码</label>
-        <textarea id="stock-import-codes" name="codes" required maxLength={5000} rows={3} disabled={busy}
-          placeholder={'WULF, IREN\nBRK.B'} autoCapitalize="characters" spellCheck={false}
+        <label htmlFor="stock-import-codes" className="block text-sm">{market === 'CN' ? 'A股代码（标准后缀）' : '美股代码'}</label>
+        <textarea id="stock-import-codes" name="codes" value={codes} onChange={(event) => setCodes(event.target.value)} required maxLength={5000} rows={3} disabled={busy}
+          placeholder={market === 'CN' ? '600519.SH, 300750.SZ\n688981.SH' : 'WULF, IREN\nBRK.B'} autoCapitalize="characters" spellCheck={false}
           className="w-full resize-y rounded-lg border border-border bg-bg-primary p-3 font-mono text-sm outline-none focus:border-accent-gold disabled:opacity-50" />
         <div className="flex flex-wrap gap-2">
           <Button type="submit" disabled={busy || task.isLoading || task.statusUnreachable}>

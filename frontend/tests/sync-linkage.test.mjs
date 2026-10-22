@@ -51,20 +51,20 @@ test('终态联动：常规查询刷新、已运行扫描重跑、未运行扫�
   const status = { count: 0 };
 
   const unsubs = [
-    observe(queryClient, ['stock', 'AAPL.US', 120], stock),
+    observe(queryClient, ['market', 'US', 'stock', 'AAPL.US', 120], stock),
     // 已运行过的选股：页面在运行后启用查询并持有结果
-    observe(queryClient, ['screen', 'B1', 20], screen, { initialData: { count: 1 } }),
+    observe(queryClient, ['market', 'US', 'screen', 'B1', 20], screen, { initialData: { count: 1 } }),
     // 未运行过的扫描：页面保持禁用，联动不得触发首次执行
-    observe(queryClient, ['dashboard-scan'], scan, { enabled: false }),
-    observe(queryClient, ['commentary', 'AAPL.US', 120], commentary),
-    observe(queryClient, DATA_STATUS_KEY, status),
+    observe(queryClient, ['market', 'US', 'dashboard-scan'], scan, { enabled: false }),
+    observe(queryClient, ['market', 'US', 'commentary', 'AAPL.US', 120], commentary),
+    observe(queryClient, ['market', 'US', ...DATA_STATUS_KEY], status),
   ];
 
   await queryClient.refetchQueries({ type: 'active' });
   const base = { stock: stock.count, screen: screen.count, commentary: commentary.count, status: status.count };
   assert.equal(scan.count, 0);
 
-  refreshAfterSync(queryClient);
+  refreshAfterSync(queryClient, 'US');
   await new Promise((resolve) => setTimeout(resolve, 20));
 
   assert.equal(stock.count, base.stock + 1, '行情查询应主动刷新一次');
@@ -79,11 +79,28 @@ test('终态联动：常规查询刷新、已运行扫描重跑、未运行扫�
 test('终态联动不刷新未在联动清单内的其他查询', async () => {
   const queryClient = new QueryClient();
   const other = { count: 0 };
-  const unsub = observe(queryClient, ['backtest-result'], other);
+  const unsub = observe(queryClient, ['market', 'US', 'backtest-result'], other);
   await queryClient.refetchQueries({ type: 'active' });
   const base = other.count;
-  refreshAfterSync(queryClient);
+  refreshAfterSync(queryClient, 'US');
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(other.count, base);
   unsub();
+});
+
+test('CN 任务终态只刷新 CN，不能刷新 US 缓存或付费点评', async () => {
+  const queryClient = new QueryClient();
+  const us = { count: 0 }, cn = { count: 0 };
+  const unsubs = [
+    observe(queryClient, ['market', 'US', 'stock', 'AAPL.US'], us),
+    observe(queryClient, ['market', 'CN', 'stock', '600519.SH'], cn),
+  ];
+  await queryClient.refetchQueries({ type: 'active' });
+  const baseline = { us: us.count, cn: cn.count };
+  refreshAfterSync(queryClient, 'CN');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(us.count, baseline.us);
+  assert.equal(cn.count, baseline.cn + 1);
+  unsubs.forEach((unsub) => unsub());
+  queryClient.clear();
 });

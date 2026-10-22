@@ -3,6 +3,7 @@ import { formatNumber } from '../../lib/formatters';
 
 interface Props {
   indicators: IndicatorDetail;
+  priceUnit: string;
 }
 
 /**
@@ -38,8 +39,9 @@ function SectionLabel({ children, accent }: { children: React.ReactNode; accent?
   );
 }
 
-export default function IndicatorPanel({ indicators }: Props) {
+export default function IndicatorPanel({ indicators, priceUnit }: Props) {
   const { kdj, macd, bbi, rsi, bollinger, vol_ratio, double_line, brick, dmi, signal, sell_score } = indicators;
+  const price = (value: number | null | undefined) => value == null || !Number.isFinite(value) ? '--' : `${formatNumber(value)} ${priceUnit}`;
 
   const sellColor = sell_score >= 3 ? '#ef4444' : sell_score >= 2 ? '#f59e0b' : '#22c55e';
   const signalColor = signal === 'B1' || signal === 'B2' ? '#22c55e'
@@ -89,15 +91,15 @@ export default function IndicatorPanel({ indicators }: Props) {
         <Stat label="6"  value={formatNumber(rsi.rsi6)} color={rsi.rsi6 > 70 ? '#ef4444' : rsi.rsi6 < 30 ? '#22c55e' : undefined} />
         <Stat label="12" value={formatNumber(rsi.rsi12)} />
         <Stat label="24" value={formatNumber(rsi.rsi24)} />
-        <Stat label="BBI" value={formatNumber(bbi)} />
+        <Stat label="BBI" value={price(bbi)} />
       </div>
 
       {/* 布林带 — 一行紧凑 */}
       <SectionLabel accent="cyan">布林带</SectionLabel>
       <div className="col-span-2 grid grid-cols-4 gap-x-1">
-        <Stat label="上" value={formatNumber(bollinger.upper)} />
-        <Stat label="中" value={formatNumber(bollinger.mid)} />
-        <Stat label="下" value={formatNumber(bollinger.lower)} />
+        <Stat label="上" value={price(bollinger.upper)} />
+        <Stat label="中" value={price(bollinger.mid)} />
+        <Stat label="下" value={price(bollinger.lower)} />
         <Stat label="位" value={`${formatNumber(bollinger.position)}%`}
               color={bollinger.position > 80 ? '#ef4444' : bollinger.position < 20 ? '#22c55e' : undefined} />
       </div>
@@ -105,8 +107,8 @@ export default function IndicatorPanel({ indicators }: Props) {
       {/* 双线战法 + 量比 — 单独突出 */}
       <SectionLabel accent="red">双线战法</SectionLabel>
       <div className="col-span-2 grid grid-cols-4 gap-x-1">
-        <Stat label="白" value={formatNumber(double_line.white)} color="#ffffff" />
-        <Stat label="黄" value={formatNumber(double_line.yellow)} color="#fbbf24" />
+        <Stat label="白" value={price(double_line.white)} color="#ffffff" />
+        <Stat label="黄" value={price(double_line.yellow)} color="#fbbf24" />
         <Stat label="比" value={formatNumber(vol_ratio)} color={(vol_ratio ?? 0) > 2 ? '#f59e0b' : undefined} />
         <Stat label="砖" value={`${brick.count}块`} color={brick.trend === 'RED' ? '#ef4444' : brick.trend === 'GREEN' ? '#22c55e' : undefined} />
       </div>

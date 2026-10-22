@@ -1,5 +1,8 @@
 """发布包只携带功能文件，不携带各环境的业务数据和秘密。"""
 
+from pathlib import Path
+import shutil
+import subprocess
 import zipfile
 
 import pytest
@@ -18,6 +21,13 @@ def test_backend_package_excludes_runtime_data_and_configuration(tmp_path):
         "data/stock_data.db": "本地数据库",
         "data/stock_data.db-wal": "未合并日志",
         "data/stock_data.db.bak": "备份",
+        "data/stock_data_cn.db": "CN数据库",
+        "data/stock_data_cn.db-wal": "CN日志",
+        "data/stock_data_cn.db-shm": "CN共享内存",
+        "data/.cn-init-test/source.db": "源快照",
+        "data/.cn-init-test/candidate.db": "候选库",
+        "data/.cn-init-test/manifest.json": "迁移清单",
+        "modules/.cn-init-custom/private.py": "自定义目录候选内容",
         ".env": "SECRET=private",
         ".env.production": "SECRET=private",
         "modules/.env": "SECRET=private",
@@ -42,7 +52,33 @@ def test_backend_package_excludes_runtime_data_and_configuration(tmp_path):
         }
 
 
-@pytest.mark.parametrize("unsafe", [".env", "data/stock_data.db", "../outside.py", "/api/main.py"])
+def test_gitignore_excludes_cn_staging_without_hiding_static_stock_pools():
+    git = shutil.which("git")
+    if git is None:
+        pytest.skip("未安装Git")
+    root = Path(__file__).resolve().parents[1]
+    private = [
+        "data/stock_data_cn.db", "data/stock_data_cn.db-wal", "data/stock_data_cn.db-shm",
+        "data/.cn-init-test/source.db", "data/.cn-init-test/candidate.db",
+        "data/.cn-init-test/manifest.json", "custom/.cn-init-test/manifest.json",
+        ".env", ".env.production",
+    ]
+    public = ["data/nasdaq100.json", "data/sp500.json", ".env.example"]
+    result = subprocess.run(
+        [git, "-C", str(root), "check-ignore", "--no-index", "-z", "--stdin"],
+        input=("\0".join(private + public) + "\0").encode("utf-8"),
+        capture_output=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert set(result.stdout.decode("utf-8").rstrip("\0").split("\0")) == set(private)
+
+
+@pytest.mark.parametrize("unsafe", [
+    ".env", "data/stock_data.db", "data/stock_data_cn.db", "data/stock_data_cn.db-wal",
+    "data/stock_data_cn.db-shm", "data/.cn-init-test/source.db",
+    "data/.cn-init-test/candidate.db", "data/.cn-init-test/manifest.json",
+    "modules/.cn-init-custom/private.py", "../outside.py", "/api/main.py",
+])
 def test_apply_rejects_entire_package_before_writing(tmp_path, unsafe):
     from scripts.deploy_package import apply_package
 

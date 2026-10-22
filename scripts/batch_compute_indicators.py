@@ -10,22 +10,26 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from modules.data_sync import DataSyncer
-from modules.tushare_client import TushareClient  # noqa: F401  触发 env / token 校验
+from modules.database import market_context
+from modules.data_sync import sync_workspace_stocks
 from scripts._common import load_watchlist
 
 
 def main():
     p = argparse.ArgumentParser(description="批量计算自选股的指标缓存（薄壳）")
+    p.add_argument("--market", choices=["US", "CN"], default="US", help="工作空间市场（默认US）")
     args = p.parse_args()
+    with market_context(args.market):
+        return _run(args)
 
+
+def _run(args):
     ts_codes = load_watchlist()
     if not ts_codes:
         print("自选股清单为空")
         return
 
-    syncer = DataSyncer()
-    results = syncer.sync_all_indicators(ts_codes=ts_codes)
+    results = sync_workspace_stocks(ts_codes, mode="indicators")
     synced = sum(1 for v in results.values() if v > 0)
     print(f"sync_all_indicators 完成: 总 {len(ts_codes)} 只, 成功 {synced} 只")
 

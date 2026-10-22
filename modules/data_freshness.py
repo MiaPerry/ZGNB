@@ -6,9 +6,10 @@ import logging
 import threading
 import uuid
 
-from .database import get_connection, get_db_connection, get_db_path
+from .database import get_connection, get_db_connection, get_db_path, get_market, market_context
 
 logger = logging.getLogger(__name__)
+_HEARTBEAT_SECONDS = 30
 
 
 def rotate_data_epoch(conn):
@@ -28,14 +29,18 @@ def record_data_change(conn, ts_code, trade_date):
     )
 
 
+def _legacy_epoch(path):
+    """旧库文件身份只读计算；快照建立时固定，首次写入迁移为持久代次。"""
+    stat = path.stat()
+    return hashlib.sha256(f"{path}:{stat.st_ino}:{stat.st_ctime_ns}".encode()).hexdigest()[:24]
+
+
 def _epoch(conn):
     row = conn.execute("SELECT message FROM sync_log WHERE data_type='data_epoch' ORDER BY id DESC LIMIT 1").fetchone()
     if row:
         return row[0]
-    path = get_db_path()
-    stat = path.stat()
-    # 旧库没有代次时使用文件身份；首次写入会迁移为持久化代次。
-    return hashlib.sha256(f"{path}:{stat.st_ino}:{stat.st_ctime_ns}".encode()).hexdigest()[:24]
+    frozen = getattr(conn, "fallback_data_epoch", None)
+    return frozen if frozen is not None else _legacy_epoch(get_db_path())
 
 
 def _version(conn, ts_code=None):
@@ -52,6 +57,52 @@ def get_data_version(ts_code=None):
     with closing(get_db_connection()) as conn:
         conn.execute("BEGIN")
         return _version(conn, ts_code)
+
+
+def _cn_basis_status(conn, code):
+    """CN就绪要求完整发布依据；辅助规则缺失独立表示未知。"""
+    from .data_sync import CN_PRICE_BASIS_VERSION, CN_INDEX_BASIS_VERSION
+
+    asset = conn.execute("SELECT asset_type FROM cn_asset_metadata WHERE ts_code=?", (code,)).fetchone()
+    asset_type = asset[0] if asset else None
+    rules = ({"status": "not_applicable", "reason": "指数不适用个股涨跌停规则"} if asset_type == "index" else
+             {"status": "unknown", "reason": "尚未取得逐日源端涨跌停价格，不能判定规则"})
+    details = {"asset_type": asset_type, "rules": rules, "basis_ready": False}
+    publication = conn.execute("SELECT * FROM cn_daily_publication WHERE ts_code=?", (code,)).fetchone()
+    latest = conn.execute("SELECT MAX(trade_date),COUNT(*) FROM daily_kline WHERE ts_code=?", (code,)).fetchone()
+    basis = CN_INDEX_BASIS_VERSION if asset_type == "index" else CN_PRICE_BASIS_VERSION
+    if (asset_type is None or not publication or not latest[0] or publication["asset_type"] != asset_type
+            or publication["basis_version"] != basis or publication["anchor_date"] != latest[0]):
+        return details
+    raw_count = conn.execute("SELECT COUNT(*) FROM cn_raw_daily WHERE ts_code=?", (code,)).fetchone()[0]
+    factor_count = conn.execute("SELECT COUNT(*) FROM cn_adj_factor WHERE ts_code=?", (code,)).fetchone()[0]
+    if raw_count != latest[1] or factor_count != (latest[1] if asset_type == "stock" else 0):
+        return details
+    anchor = publication["anchor_factor"]
+    if asset_type == "stock":
+        factor = conn.execute("SELECT adj_factor FROM cn_adj_factor WHERE ts_code=? AND trade_date=?", (code, latest[0])).fetchone()
+        if not factor or not anchor or anchor <= 0 or anchor != factor[0]:
+            return details
+    elif anchor is not None:
+        return details
+    ratio = "f.adj_factor / ?" if asset_type == "stock" else "1.0"
+    conditions = ["r.ts_code IS NULL", "i.ts_code IS NULL", "r.basis_version != ?"]
+    args = [basis]
+    for key in ("open", "high", "low", "close"):
+        conditions.append(f"ABS(k.{key}-r.{key}*({ratio}))>MAX(1e-9,ABS(k.{key})*1e-10)")
+        if asset_type == "stock":
+            args.append(anchor)
+        conditions.append(f"k.{key} IS NULL OR i.{key} IS NULL OR k.{key}!=i.{key}")
+    conditions.extend(["k.vol!=r.vol", "k.amount!=r.amount", "k.pct_chg!=r.pct_chg"])
+    if asset_type == "stock":
+        conditions.append("f.ts_code IS NULL OR f.adj_factor<=0")
+    invalid = conn.execute(
+        "SELECT COUNT(*) FROM daily_kline k LEFT JOIN cn_raw_daily r USING(ts_code,trade_date) "
+        "LEFT JOIN cn_adj_factor f USING(ts_code,trade_date) LEFT JOIN indicator_cache i USING(ts_code,trade_date) "
+        f"WHERE k.ts_code=? AND ({' OR '.join(conditions)})", [code, *args],
+    ).fetchone()[0]
+    details["basis_ready"] = not invalid
+    return details
 
 
 def get_data_status(ts_code=None):
@@ -80,26 +131,32 @@ def get_data_status(ts_code=None):
         updating = bool(conn.execute(
             "SELECT 1 FROM sync_log WHERE data_type='data_batch' AND status='running' "
             "AND created_at > datetime('now','-120 seconds') LIMIT 1").fetchone())
+        cn_details = {row[0]: _cn_basis_status(conn, row[0]) for row in rows} if get_market() == "CN" else {}
     stocks = {}
     for code, days, date, indicator_date, missing, orphan in rows:
         stocks[code] = {"data_date": date, "indicator_date": indicator_date, "days": days or 0,
                         "missing_indicators": missing or 0, "orphan_indicators": orphan,
                         "ready": bool(days and not missing),
                         "version": f"{epoch}:{revisions.get(code, '0')}"}
+        if code in cn_details:
+            stocks[code].update(cn_details[code])
+            stocks[code]["ready"] = bool(stocks[code]["ready"] and not orphan and cn_details[code]["basis_ready"])
     markets = {}
-    for market in ("US", "HK"):
-        entries = [s for code, s in stocks.items() if code.endswith('.' + market)]
+    for market in (("CN",) if get_market() == "CN" else ("US", "HK")):
+        suffixes = (".SH", ".SZ") if market == "CN" else ('.' + market,)
+        entries = [s for code, s in stocks.items() if code.endswith(suffixes)]
         dates = [s["data_date"] for s in entries if s["data_date"]]
         markets[market] = {"oldest_date": min(dates, default=None), "latest_date": max(dates, default=None),
                            "not_ready": sum(not s["ready"] for s in entries)}
-    return {"version": version, "updating": updating, "stocks": stocks, "markets": markets,
+    return {"workspace_market": get_market(), "version": version, "updating": updating, "stocks": stocks, "markets": markets,
             "ready": bool(stocks) and all(s["ready"] for s in stocks.values())}
 
 
 @contextmanager
 def data_update_batch():
     """心跳仅合并页面刷新，不承担数据版本发布；崩溃后两分钟租约自动失效。"""
-    with get_connection() as conn:
+    market, path = get_market(), get_db_path()
+    with market_context(market, path), get_connection() as conn:
         batch_id = conn.execute(
             "INSERT INTO sync_log(data_type,status,message) VALUES ('data_batch','running',?)",
             (uuid.uuid4().hex,),
@@ -107,9 +164,9 @@ def data_update_batch():
     stopped = threading.Event()
 
     def heartbeat():
-        while not stopped.wait(30):
+        while not stopped.wait(_HEARTBEAT_SECONDS):
             try:
-                with get_connection() as conn:
+                with market_context(market, path), get_connection() as conn:
                     conn.execute("UPDATE sync_log SET created_at=CURRENT_TIMESTAMP WHERE id=?", (batch_id,))
             except Exception:
                 logger.warning("更新批次心跳失败", exc_info=True)
@@ -121,5 +178,5 @@ def data_update_batch():
     finally:
         stopped.set()
         thread.join()
-        with get_connection() as conn:
+        with market_context(market, path), get_connection() as conn:
             conn.execute("UPDATE sync_log SET status='finished', created_at=CURRENT_TIMESTAMP WHERE id=?", (batch_id,))

@@ -1,4 +1,5 @@
-import api from './client';
+import api, { marketRequest } from './client.ts';
+import type { WorkspaceMarket } from '../stores/appStore.ts';
 import type { BacktestResult } from './types';
 
 export interface BacktestParams {
@@ -10,20 +11,20 @@ export interface BacktestParams {
   position_pct?: number;
 }
 
-export async function runShaofu(params: BacktestParams): Promise<BacktestResult> {
-  const { data } = await api.post<BacktestResult>('/backtest/shaofu', params);
+export async function runShaofu(market: WorkspaceMarket, params: BacktestParams, signal?: AbortSignal): Promise<BacktestResult> {
+  const { data } = await api.post<BacktestResult>('/backtest/shaofu', params, marketRequest(market, signal));
   return data;
 }
 
-export async function runMulti(params: BacktestParams): Promise<BacktestResult> {
-  const { data } = await api.post<BacktestResult>('/backtest/multi', params);
+export async function runMulti(market: WorkspaceMarket, params: BacktestParams, signal?: AbortSignal): Promise<BacktestResult> {
+  const { data } = await api.post<BacktestResult>('/backtest/multi', params, marketRequest(market, signal));
   return data;
 }
 
-export async function runPortfolio(tsCodes: string[], params?: Partial<BacktestParams>): Promise<BacktestResult> {
+export async function runPortfolio(market: WorkspaceMarket, tsCodes: string[], params?: Partial<BacktestParams>, signal?: AbortSignal): Promise<BacktestResult> {
   const { data } = await api.post<BacktestResult>('/backtest/portfolio', {
     ts_codes: tsCodes,
     ...params,
-  });
+  }, marketRequest(market, signal));
   return data;
 }

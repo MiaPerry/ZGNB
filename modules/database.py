@@ -4,12 +4,14 @@
 """
 
 import os
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any, Optional
 from collections.abc import Generator
 from dataclasses import dataclass
 from contextlib import contextmanager
+from contextvars import ContextVar
 
 
 @dataclass
@@ -53,32 +55,203 @@ if not _db_path.is_absolute():
 DB_PATH = _db_path.resolve()
 
 
-def get_db_path() -> Path:
-    """获取数据库路径（每次调用时动态读取 DB_PATH 环境变量）"""
-    path_str = os.getenv("DB_PATH", "data/stock_data.db")
-    path = Path(path_str)
-    if not path.is_absolute():
-        path = Path(__file__).parent.parent / path_str
-    path = path.resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
+class MarketUnavailableError(RuntimeError):
+    """目标工作空间尚未初始化；禁止创建空库或回退另一市场。"""
+
+
+@dataclass(frozen=True)
+class MarketBinding:
+    """请求和后台任务捕获的不可变库身份。"""
+
+    market: str
+    db_path: Path
+
+
+_market_binding: ContextVar[MarketBinding | None] = ContextVar("market_binding", default=None)
+_read_binding: ContextVar[tuple | None] = ContextVar("read_binding", default=None)
+
+
+class _SnapshotConnection:
+    """借用只读连接：旧读取代码的close/commit不能结束外层快照。"""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def execute(self, sql, parameters=()):
+        if sql.strip().rstrip(";").upper() in {"BEGIN", "BEGIN DEFERRED"}:
+            return self._conn.cursor()
+        return self._conn.execute(sql, parameters)
+
+    def close(self):
+        pass
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+
+def get_read_snapshot_connection(market=None):
+    """只借用同库、同线程的快照；显式其他市场不受当前快照影响。"""
+    import threading
+
+    snapshot = _read_binding.get()
+    selected = market if market is not None else get_market()
+    if snapshot and snapshot[:3] == (selected, get_db_path(selected), threading.get_ident()):
+        return snapshot[3]
+    return None
+
+
+@contextmanager
+def read_snapshot():
+    """冻结数据库页；嵌套读共用，跨市场独立，所有借用者退出后才关闭。"""
+    import threading
+
+    if get_read_snapshot_connection() is not None:
+        yield get_read_snapshot_connection()
+        return
+    with market_context(get_market(), get_db_path()) as binding:
+        if not binding.db_path.is_file():
+            raise MarketUnavailableError(f"{binding.market}尚未初始化")
+        conn = sqlite3.connect(binding.db_path.as_uri() + "?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        token = None
+        try:
+            conn.execute("PRAGMA query_only=ON")
+            conn.execute("BEGIN")
+            conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
+            borrowed = _SnapshotConnection(conn)
+            from .data_freshness import _legacy_epoch
+            borrowed.fallback_data_epoch = _legacy_epoch(binding.db_path)
+            token = _read_binding.set((binding.market, binding.db_path, threading.get_ident(), borrowed))
+            yield borrowed
+        finally:
+            if token is not None:
+                _read_binding.reset(token)
+            conn.close()
+
+
+def cn_snapshot_read(function):
+    """CN业务整个同步调用链共用只读快照；US保留既有计算行为。"""
+    from functools import wraps
+
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        if get_market() != "CN":
+            return function(*args, **kwargs)
+        with read_snapshot():
+            return function(*args, **kwargs)
+    return wrapped
+
+
+def validate_market(market: str) -> str:
+    """工作空间只接受US/CN，不与股票分类混用。"""
+    if market not in ("US", "CN"):
+        raise ValueError("非法市场，必须为US或CN")
+    return market
+
+
+def get_market() -> str:
+    binding = _market_binding.get()
+    return binding.market if binding else "US"
+
+
+class MarketCodeError(ValueError):
+    """业务边界拒绝错误工作空间或非标准代码。"""
+
+
+def validate_market_code(ts_code: str, market: str | None = None) -> str:
+    """只校验标准代码归属；资产类型由元数据判定，不在底层CRUD强加限制。"""
+    selected = validate_market(market if market is not None else get_market())
+    patterns = {"US": r"(?:[A-Z0-9][A-Z0-9.\-^=]*\.US|[0-9]{5}\.HK)",
+                "CN": r"[0-9]{6}\.(?:SH|SZ)"}
+    if not isinstance(ts_code, str) or not re.fullmatch(patterns[selected], ts_code):
+        raise MarketCodeError(f"股票代码不属于当前{selected}工作空间")
+    return ts_code
+
+
+def _resolve_path(value: str | Path) -> Path:
+    path = Path(value)
+    return (path if path.is_absolute() else Path(__file__).parent.parent / path).resolve()
+
+
+def _validate_paths(us: Path, cn: Path) -> None:
+    if us == cn or (us.exists() and cn.exists() and os.path.samefile(us, cn)):
+        raise ValueError("US/CN数据库路径冲突，必须使用两个独立文件")
+
+
+def get_db_path(market: str | None = None) -> Path:
+    """解析当前库；请求/任务绑定路径，旧非请求调用仍动态读取配置。"""
+    selected = validate_market(market if market is not None else get_market())
+    binding = _market_binding.get()
+    if binding and selected == binding.market:
+        return binding.db_path
+    us = _resolve_path(os.getenv("DB_PATH", "data/stock_data.db"))
+    cn = _resolve_path(os.getenv("CN_DB_PATH", "data/stock_data_cn.db"))
+    _validate_paths(us, cn)
+    path = us if selected == "US" else cn
+    if selected == "US":
+        path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def get_db_connection() -> sqlite3.Connection:
-    """获取数据库连接（动态读取 DB_PATH 环境变量）"""
-    conn = sqlite3.connect(get_db_path())
+@contextmanager
+def market_context(market: str, db_path: str | Path | None = None):
+    """显式绑定并恢复市场；后台线程/进程必须携带启动时库身份。"""
+    selected = validate_market(market)
+    path = _resolve_path(db_path) if db_path is not None else get_db_path(selected)
+    other = _resolve_path(os.getenv("CN_DB_PATH" if selected == "US" else "DB_PATH",
+                                    "data/stock_data_cn.db" if selected == "US" else "data/stock_data.db"))
+    _validate_paths(path, other)
+    binding = MarketBinding(selected, path)
+    token = _market_binding.set(binding)
+    try:
+        yield binding
+    finally:
+        _market_binding.reset(token)
+
+
+def get_db_connection(market: str | None = None, *, allow_create: bool = False) -> sqlite3.Connection:
+    """CN业务连接只打开已有文件；建库只能通过显式初始化。"""
+    selected = validate_market(market if market is not None else get_market())
+    borrowed = get_read_snapshot_connection(selected)
+    if borrowed is not None:
+        if allow_create:
+            raise RuntimeError("只读快照中禁止初始化数据库")
+        return borrowed
+    path = get_db_path(selected)
+    if selected == "CN" and not allow_create:
+        if not path.is_file():
+            raise MarketUnavailableError("CN尚未初始化")
+        conn = sqlite3.connect(path.as_uri() + "?mode=rw", uri=True)
+    else:
+        if allow_create:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 @contextmanager
-def get_connection() -> Generator[sqlite3.Connection, None, None]:
-    """获取数据库连接的上下文管理器"""
-    conn = get_db_connection()
-    # 开启 WAL 模式以提升并发和写入性能
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA synchronous=NORMAL;")
+def get_connection(market: str | None = None, *, allow_create: bool = False) -> Generator[sqlite3.Connection, None, None]:
+    """统一连接出口，成功提交、失败回滚、始终关闭。"""
+    conn = get_db_connection(market, allow_create=allow_create)
+    if isinstance(conn, _SnapshotConnection):
+        yield conn
+        return
     try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
         yield conn
         conn.commit()
     except Exception:
@@ -247,9 +420,9 @@ def init_tracking_tables(conn: sqlite3.Connection) -> None:
     """)
 
 
-def init_database() -> None:
-    """初始化数据库，创建所有表"""
-    with get_connection() as conn:
+def init_database(market: str | None = None) -> None:
+    """显式初始化目标数据库，创建公共表结构。"""
+    with get_connection(market, allow_create=True) as conn:
         cursor = conn.cursor()
 
         # 1. 核心K线数据表
@@ -611,7 +784,53 @@ def init_database() -> None:
         # 12. 自我改进系统跟踪表（tracking_tables.sql）
         init_tracking_tables(conn)
 
-        print(f"数据库初始化完成: {get_db_path()}")
+        if validate_market(market if market is not None else get_market()) == "CN":
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS cn_asset_metadata (
+                    ts_code TEXT PRIMARY KEY,
+                    asset_type TEXT NOT NULL CHECK(asset_type IN ('stock','index')),
+                    currency TEXT NOT NULL DEFAULT 'CNY' CHECK(currency='CNY'),
+                    sources TEXT NOT NULL,
+                    is_seed INTEGER NOT NULL DEFAULT 0 CHECK(is_seed IN (0,1)),
+                    is_hs300 INTEGER NOT NULL DEFAULT 0 CHECK(is_hs300 IN (0,1)),
+                    constituent_date TEXT,
+                    snapshot_sha256 TEXT,
+                    list_status TEXT CHECK(list_status IN ('L','D','P') OR list_status IS NULL),
+                    metadata_status TEXT NOT NULL DEFAULT 'missing' CHECK(metadata_status IN ('complete','missing')),
+                    CHECK(asset_type='stock' OR is_hs300=0)
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS cn_raw_daily (
+                    ts_code TEXT NOT NULL,
+                    trade_date TEXT NOT NULL,
+                    open REAL NOT NULL, high REAL NOT NULL, low REAL NOT NULL, close REAL NOT NULL,
+                    vol REAL NOT NULL, amount REAL NOT NULL, pct_chg REAL NOT NULL,
+                    basis_version TEXT NOT NULL,
+                    PRIMARY KEY(ts_code,trade_date)
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS cn_adj_factor (
+                    ts_code TEXT NOT NULL,
+                    trade_date TEXT NOT NULL,
+                    adj_factor REAL NOT NULL CHECK(adj_factor>0),
+                    PRIMARY KEY(ts_code,trade_date)
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS cn_daily_publication (
+                    ts_code TEXT PRIMARY KEY,
+                    asset_type TEXT NOT NULL CHECK(asset_type IN ('stock','index')),
+                    basis_version TEXT NOT NULL,
+                    anchor_date TEXT NOT NULL,
+                    anchor_factor REAL,
+                    published_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+        print(f"数据库初始化完成: {get_db_path(market)}")
 
         # 删除旧的indicators表（如果存在）
         cursor.execute("DROP TABLE IF EXISTS indicators")

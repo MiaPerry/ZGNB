@@ -94,6 +94,56 @@ def test_compute_backfill_start():
     assert compute_backfill_start(datetime(2026, 9, 22, 10, 0), years=5) == "20210922"
 
 
+def test_nasdaq_entry_fixes_us_identity_and_restores_cn(temp_db, monkeypatch):
+    from modules.database import get_db_path, get_market, market_context
+    from scripts import import_nasdaq100 as module
+
+    seen = []
+
+    def plan(items, include_existing):
+        seen.append((get_market(), get_db_path()))
+        return ["ADI.US"]
+
+    monkeypatch.setattr(module, "plan_codes", plan)
+    with market_context("CN"):
+        assert module.main(["--dry-run", "--only", "ADI.US"]) == 0
+        assert get_market() == "CN"
+    assert seen == [("US", get_db_path("US"))]
+    assert not get_db_path("CN").exists()
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_nasdaq_writes_and_backup_stay_us_from_cn(temp_db, monkeypatch, fail):
+    from modules.database import get_connection, get_db_path, get_market, init_database, market_context
+    from scripts import import_nasdaq100 as module
+
+    seen = []
+
+    def backup():
+        seen.append((get_market(), get_db_path()))
+        if fail:
+            raise OSError("backup failed")
+        return get_db_path().parent / "fake-backup.db"
+
+    monkeypatch.setattr(module, "create_import_backup", backup)
+    monkeypatch.setattr(module, "_make_recompute", lambda: lambda code: seen.append((get_market(), get_db_path())) or 1)
+    with get_connection() as conn:
+        conn.execute("INSERT INTO daily_kline(ts_code, trade_date, open, high, low, close, vol) "
+                     "VALUES ('ADI.US', '20260918', 1, 1, 1, 1, 1)")
+    with market_context("CN"):
+        init_database()
+        if fail:
+            with pytest.raises(OSError, match="backup failed"):
+                module.main(["--indicators-only", "--only", "ADI.US"])
+        else:
+            assert module.main(["--indicators-only", "--only", "ADI.US"]) == 0
+        assert get_market() == "CN"
+        with get_connection() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM daily_kline").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM sync_log WHERE data_type != 'data_epoch'").fetchone()[0] == 0
+    assert seen and all(identity == ("US", get_db_path("US")) for identity in seen)
+
+
 def test_main_start_overrides_rolling_backfill_start(temp_db, monkeypatch, capsys):
     """--start 固定回补起点优先于 --years 滚动窗口"""
     from scripts import import_nasdaq100 as module

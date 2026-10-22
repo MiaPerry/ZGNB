@@ -8,6 +8,8 @@ import logging
 import os
 from pathlib import Path
 
+from modules.database import get_market, get_watchlist, validate_market_code
+
 logger = logging.getLogger(__name__)
 
 # 项目根目录（scripts/ 的父目录）
@@ -16,14 +18,15 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 def load_watchlist() -> list[str]:
     """
-    读取自选股清单，返回 ts_code 列表（如 ['600519.SH', '000001.SZ']）。
+    读取当前库自选；显式 STOCKS_JSON 可覆盖，代码校验归属并去重。
 
-    路径优先级：STOCKS_JSON env > data/stocks_final.json
-    JSON 格式：[{code, name}, ...]，code 为纯数字（6开头→.SH，其余→.SZ）
+    JSON 格式：[{code, name}, ...]；仅 CN 兼容六位数字旧名单。
     """
-    path = os.environ.get("STOCKS_JSON") or str(PROJECT_ROOT / "data" / "stocks_final.json")
+    path = os.environ.get("STOCKS_JSON")
+    if not path:
+        return list(dict.fromkeys(validate_market_code(item["ts_code"]) for item in get_watchlist()))
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             items = json.load(f)
     except FileNotFoundError:
         logger.error(f"自选股文件不存在: {path}")
@@ -35,11 +38,7 @@ def load_watchlist() -> list[str]:
     result = []
     for item in items:
         code = item["code"]
-        # 已有后缀的直接使用，否则按首位判断
-        if "." in code:
-            result.append(code)
-        elif code.startswith("6"):
-            result.append(code + ".SH")
-        else:
-            result.append(code + ".SZ")
-    return result
+        if get_market() == "CN" and isinstance(code, str) and len(code) == 6 and code.isdigit():
+            code += ".SH" if code.startswith("6") else ".SZ"
+        result.append(validate_market_code(code))
+    return list(dict.fromkeys(result))

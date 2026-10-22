@@ -2,6 +2,8 @@
 
 import logging
 
+from modules.database import cn_snapshot_read
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,6 +42,7 @@ def remove_from_watchlist(ts_code: str) -> dict:
     return {"status": "ok" if success else "not_found"}
 
 
+@cn_snapshot_read
 def scan_watchlist() -> dict:
     """扫描自选股信号"""
     from modules.watchlist import scan_watchlist
@@ -76,6 +79,7 @@ def scan_watchlist() -> dict:
     }
 
 
+@cn_snapshot_read
 def generate_report() -> dict:
     """生成日报"""
     from modules.watchlist import generate_daily_report

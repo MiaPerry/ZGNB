@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
@@ -11,8 +11,11 @@ import LoadingSpinner from '../components/ui/LoadingSpinner';
 import ApiErrorState from '../components/ui/ApiErrorState';
 import StockImportDialog from '../components/stock/StockImportDialog';
 import { useStockImport } from '../hooks/useStockImport';
-import { formatNumber, formatPct, formatVolume } from '../lib/formatters';
-import { parseStockListQuery, updateStockListQuery, stockChangeColor } from '../lib/stockListQuery';
+import { formatAssetPrice, formatPct, formatVolume } from '../lib/formatters';
+import { parseStockListQuery, stockListRequestGate, updateStockListQuery, stockChangeColor } from '../lib/stockListQuery';
+import { useAppStore } from '../stores/appStore';
+import type { WorkspaceMarket } from '../stores/appStore';
+import { marketKey } from '../lib/syncLinkage';
 
 const inputClass = 'rounded-lg border border-border bg-bg-primary px-3 py-2 text-sm text-text-primary outline-none focus:border-accent-gold';
 const disabledClass = 'disabled:opacity-40 disabled:cursor-not-allowed';
@@ -27,22 +30,52 @@ function errorMessage(error: unknown): string {
 }
 
 export default function StockList() {
+  const market = useAppStore((s) => s.currentMarket);
+  const initialized = useAppStore((s) => s.marketInitialized);
   const [importOpen, setImportOpen] = useState(false);
   const importTask = useStockImport();
   const [search, setSearch] = useSearchParams();
-  const params = parseStockListQuery(search);
   const queryClient = useQueryClient();
-  // 复用行情查询前缀，同步完成后现有刷新逻辑会自动更新股票库。
-  const { data, isLoading, isFetching, isError, error, refetch } = useQuery({
-    queryKey: ['stock', 'list', params],
-    queryFn: ({ signal }) => fetchStockList(params, signal),
+  const defaults = parseStockListQuery(new URLSearchParams(), market);
+  // 先读目标库分类字典，CN 板块不由前端硬编码或旧 URL 决定。
+  const catalog = useQuery({
+    queryKey: marketKey(market, 'stock', 'list', defaults),
+    queryFn: ({ signal }) => fetchStockList(market, defaults, signal),
+    enabled: initialized,
   });
+  const categories = catalog.data?.markets.map((item) => item.market);
+  const { dictionaryParams } = stockListRequestGate(search, market, categories);
+  const categoryCatalog = useQuery({
+    queryKey: marketKey(market, 'stock', 'list', dictionaryParams),
+    queryFn: ({ signal }) => fetchStockList(market, dictionaryParams, signal),
+    enabled: initialized && Boolean(catalog.data),
+  });
+  const requestGate = stockListRequestGate(search, market, categories, categoryCatalog.data
+    ? { market: dictionaryParams.market, industries: categoryCatalog.data.industries } : undefined);
+  const { cleanSearch, params } = requestGate;
+  const currentSearch = search.toString();
+  useEffect(() => {
+    if (cleanSearch !== currentSearch) setSearch(new URLSearchParams(cleanSearch), { replace: true });
+  }, [cleanSearch, currentSearch, setSearch]);
+  // 复用行情查询前缀，同步完成后现有刷新逻辑会自动更新股票库。
+  const list = useQuery({
+    queryKey: marketKey(market, 'stock', 'list', params),
+    queryFn: ({ signal }) => fetchStockList(market, params, signal),
+    enabled: initialized && requestGate.enabled,
+  });
+  const { data } = list;
+  const isFetching = catalog.isFetching || categoryCatalog.isFetching || list.isFetching;
+  const isLoading = catalog.isPending || categoryCatalog.isPending || list.isPending;
+  const isError = catalog.isError || categoryCatalog.isError || list.isError;
+  const error = catalog.error ?? categoryCatalog.error ?? list.error;
+  const refetch = () => catalog.isError ? catalog.refetch()
+    : categoryCatalog.isError ? categoryCatalog.refetch() : list.refetch();
   const addMutation = useMutation({
-    mutationFn: (code: string) => addToWatchlist(code),
-    onSuccess: async () => {
+    mutationFn: (request: { market: WorkspaceMarket; code: string }) => addToWatchlist(request.market, request.code),
+    onSuccess: async (_data, request) => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['watchlist'] }),
-        queryClient.invalidateQueries({ queryKey: ['stock', 'list'] }),
+        queryClient.invalidateQueries({ queryKey: marketKey(request.market, 'watchlist') }),
+        queryClient.invalidateQueries({ queryKey: marketKey(request.market, 'stock', 'list') }),
       ]);
     },
   });
@@ -50,9 +83,8 @@ export default function StockList() {
   const update = (changes: Partial<StockListParams>) => setSearch(updateStockListQuery(search, changes));
   const reset = () => setSearch(new URLSearchParams({ market: params.market }));
   const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / params.page_size));
-  const priceUnit = params.market === '港股' ? 'HKD' : params.market === '美股指数' ? '点' : 'USD';
-  const markets = data?.markets ?? [];
-  const industries = data?.industries ?? [];
+  const markets = (catalog.data?.markets ?? []).filter((item) => item.market);
+  const industries = categoryCatalog.data?.industries ?? [];
   const sort = (key: StockSort) => update({
     sort_by: key,
     order: params.sort_by === key ? (params.order === 'asc' ? 'desc' : 'asc') : key === 'ts_code' ? 'asc' : 'desc',
@@ -111,7 +143,7 @@ export default function StockList() {
           update({ q: String(new FormData(event.currentTarget).get('q') ?? '').trim() });
         }}>
           <input name="q" aria-label="搜索代码或名称" defaultValue={params.q} maxLength={100}
-            placeholder="搜索代码或名称，如 AAPL / 苹果" className={`${inputClass} min-w-0 flex-1 basis-60`} />
+            placeholder={market === 'CN' ? '搜索代码或名称，如 600519 / 茅台' : '搜索代码或名称，如 AAPL / 苹果'} className={`${inputClass} min-w-0 flex-1 basis-60`} />
           <Button type="submit">搜索</Button>
           <Button type="button" variant="ghost" onClick={(event) => { event.currentTarget.form?.reset(); reset(); }}>重置</Button>
         </form>
@@ -119,7 +151,8 @@ export default function StockList() {
           <label className="flex flex-col gap-1.5 text-xs text-text-muted">
             市场分类
             <select aria-label="市场分类" value={params.market} onChange={(e) => update({ market: e.target.value as StockMarket })} className={inputClass}>
-              {!markets.some((m) => m.market === params.market) && <option value={params.market}>{params.market}</option>}
+              {market === 'CN' && <option value="全部A股">全部A股板块</option>}
+              {market === 'US' && !markets.some((m) => m.market === params.market) && <option value={params.market}>{params.market}</option>}
               {markets.map((m) => <option key={m.market} value={m.market}>{m.market}（{m.count}）</option>)}
             </select>
           </label>
@@ -146,8 +179,8 @@ export default function StockList() {
         </div>
       </Card>
 
-      {addMutation.isError && <p role="alert" className="text-sm text-accent-red">加入自选失败：{errorMessage(addMutation.error)}</p>}
-      {addMutation.isSuccess && <p role="status" className="text-sm text-accent-green">{addMutation.variables} 已加入自选</p>}
+      {addMutation.variables?.market === market && addMutation.isError && <p role="alert" className="text-sm text-accent-red">加入自选失败：{errorMessage(addMutation.error)}</p>}
+      {addMutation.variables?.market === market && addMutation.isSuccess && <p role="status" className="text-sm text-accent-green">{addMutation.variables.code} 已加入自选</p>}
 
       {isError ? <ApiErrorState message={errorMessage(error)} onRetry={() => void refetch()} /> : (
         <div className="overflow-hidden rounded-xl border border-border/40 bg-bg-card" aria-busy={isFetching}>
@@ -169,9 +202,9 @@ export default function StockList() {
                     {sortHeading('ts_code', '代码')}
                     <th className="px-3 py-3 text-left">名称</th>
                     <th className="px-3 py-3 text-left">行业</th>
-                    <th className="px-3 py-3 text-right">最近收盘（{priceUnit}）</th>
+                    <th className="px-3 py-3 text-right">最近收盘（原币 / 点）</th>
                     {sortHeading('pct_chg', '涨跌幅')}
-                    {sortHeading('vol', params.market === '美股指数' ? '成交量（源数据）' : '成交量（股）')}
+                    {sortHeading('vol', params.market.includes('指数') ? '成交量（源数据）' : '成交量（股）')}
                     <th className="px-3 py-3 text-left">交易日期</th>
                     <th className="px-3 py-3 text-left">操作</th>
                   </tr>
@@ -182,7 +215,7 @@ export default function StockList() {
                       <td className="px-3 py-3 font-mono font-semibold text-accent-gold">{stock.ts_code}</td>
                       <td className="max-w-48 truncate px-3 py-3" title={stock.name}>{stock.name}</td>
                       <td className="max-w-36 truncate px-3 py-3 text-xs text-text-secondary" title={stock.industry}>{stock.industry || '未分类'}</td>
-                      <td className="px-3 py-3 text-right font-mono">{stock.close === null ? '--' : formatNumber(stock.close)}</td>
+                      <td className="px-3 py-3 text-right font-mono">{formatAssetPrice(stock.close, market, stock.ts_code, stock.asset_type, stock.currency)}</td>
                       <td className={`px-3 py-3 text-right font-mono ${stockChangeColor(stock.pct_chg)}`}>{stock.pct_chg === null ? '--' : formatPct(stock.pct_chg)}</td>
                       <td className="px-3 py-3 text-right font-mono text-text-secondary">{stock.vol === null ? '--' : formatVolume(stock.vol)}</td>
                       <td className="whitespace-nowrap px-3 py-3 text-xs text-text-secondary">
@@ -193,14 +226,14 @@ export default function StockList() {
                       <td className="whitespace-nowrap px-3 py-3">
                         <div className="flex items-center gap-3">
                           {stock.data_status === 'available' && stock.indicators_ready ? (
-                            <Link to={`/stock/${stock.ts_code}`} state={{ stockListSearch: search.toString() }}
+                            <Link to={`/stock/${stock.ts_code}`} state={{ stockListSearch: cleanSearch, stockListMarket: market }}
                               className="text-xs text-accent-blue hover:underline" aria-label={`分析 ${stock.ts_code}`}>分析</Link>
                           ) : <span className="text-xs text-text-muted" title="行情或指标未就绪，暂不能分析">分析不可用</span>}
                           <button disabled={stock.is_watchlisted || addMutation.isPending}
-                            onClick={() => addMutation.mutate(stock.ts_code)}
+                            onClick={() => addMutation.mutate({ market, code: stock.ts_code })}
                             aria-label={`${stock.is_watchlisted ? '已自选' : '加入自选'} ${stock.ts_code}`}
                             className={`text-xs ${stock.is_watchlisted ? 'text-text-muted' : 'text-accent-gold hover:underline'} ${disabledClass}`}>
-                            {stock.is_watchlisted ? '★ 已自选' : addMutation.isPending && addMutation.variables === stock.ts_code ? '添加中…' : '☆ 加自选'}
+                            {stock.is_watchlisted ? '★ 已自选' : addMutation.isPending && addMutation.variables?.market === market && addMutation.variables.code === stock.ts_code ? '添加中…' : '☆ 加自选'}
                           </button>
                         </div>
                       </td>

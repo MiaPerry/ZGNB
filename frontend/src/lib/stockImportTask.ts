@@ -1,4 +1,6 @@
 import type { StockImportSnapshot } from '../api/types';
+import type { WorkspaceMarket } from '../stores/appStore.ts';
+import { marketKey } from './syncLinkage.ts';
 
 export const IMPORT_TASK_KEY = ['stock-import-task'] as const;
 
@@ -10,10 +12,10 @@ export function mergeImportSnapshot(previous: StockImportSnapshot | undefined, i
   return incoming;
 }
 
-export function importQueryOptions(fetchLatest: () => Promise<StockImportSnapshot>) {
+export function importQueryOptions(fetchLatest: (signal?: AbortSignal) => Promise<StockImportSnapshot>, market: WorkspaceMarket) {
   return {
-    queryKey: IMPORT_TASK_KEY,
-    queryFn: fetchLatest,
+    queryKey: marketKey(market, ...IMPORT_TASK_KEY),
+    queryFn: ({ signal }: { signal: AbortSignal }) => fetchLatest(signal),
     structuralSharing: (old: unknown, incoming: unknown) =>
       mergeImportSnapshot(old as StockImportSnapshot | undefined, incoming as StockImportSnapshot),
     refetchInterval: (query: { state: { data?: StockImportSnapshot } }) =>

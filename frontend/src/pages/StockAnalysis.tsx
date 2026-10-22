@@ -9,17 +9,20 @@ import ScoreCard from '../components/stock/ScoreCard';
 import SignalTimeline from '../components/stock/SignalTimeline';
 import DiagnosisCard from '../components/stock/DiagnosisCard';
 import CommentaryCard from '../components/stock/CommentaryCard';
-import { formatNumber, formatPct, pctColor } from '../lib/formatters';
+import { formatAssetPrice, assetPriceUnit, formatPct, pctColor } from '../lib/formatters';
+import { useAppStore } from '../stores/appStore';
+import { stockListReturnTarget } from '../lib/stockListQuery';
+import { apiErrorMessage } from '../api/client';
 
 export default function StockAnalysis() {
   const { tsCode = '' } = useParams<{ tsCode: string }>();
   const location = useLocation();
-  const listSearch = location.state?.stockListSearch;
-  const backToList = typeof listSearch === 'string' ? (
-    <Link to={{ pathname: '/stocks', search: listSearch ? `?${listSearch}` : '' }} className="inline-block text-sm text-accent-blue hover:underline">
+  const market = useAppStore((s) => s.currentMarket);
+  const backToList = (
+    <Link to={stockListReturnTarget(location.state, market)} className="inline-block text-sm text-accent-blue hover:underline">
       ← 返回股票列表
     </Link>
-  ) : null;
+  );
   const { data: analysis, isLoading: loadingAnalysis, error: analysisError } = useStockAnalysis(tsCode);
   const { data: klineData, isLoading: loadingKline } = useKlineData(tsCode);
 
@@ -37,15 +40,16 @@ export default function StockAnalysis() {
       <div>
         {backToList}
         <div className="flex items-center justify-center h-96 text-text-muted">
-          加载失败：{analysisError?.message || '未知错误'}
+          加载失败：{analysisError ? apiErrorMessage(analysisError) : '暂无可用分析数据'}
         </div>
       </div>
     );
   }
 
-  const priceChange = analysis.prev_close > 0
+  const priceChange = market === 'CN' ? analysis.pct_chg : analysis.prev_close > 0
     ? ((analysis.price - analysis.prev_close) / analysis.prev_close) * 100
     : (analysis.pct_chg || 0);
+  const priceUnit = assetPriceUnit(market, tsCode, analysis.asset_type, analysis.currency);
 
   return (
     <div className="space-y-5">
@@ -73,14 +77,14 @@ export default function StockAnalysis() {
             </div>
             <div className="text-right flex-shrink-0">
               <div className="text-4xl md:text-5xl font-black text-text-primary tabular-nums tracking-tight leading-none">
-                ¥{formatNumber(analysis.price)}
+                {formatAssetPrice(analysis.price, market, tsCode, analysis.asset_type, analysis.currency)}
               </div>
               <div className={`text-lg md:text-xl font-bold mt-2 tabular-nums ${pctColor(priceChange)}`}>
                 {priceChange >= 0 ? '▲' : '▼'} {formatPct(priceChange)}
               </div>
               {analysis.prev_close > 0 && (
                 <div className="text-[10px] text-text-muted mt-1 font-mono">
-                  昨收 ¥{formatNumber(analysis.prev_close)}
+                  昨收 {formatAssetPrice(analysis.prev_close, market, tsCode, analysis.asset_type, analysis.currency)}
                 </div>
               )}
             </div>
@@ -89,22 +93,22 @@ export default function StockAnalysis() {
       </div>
 
       {/* ============ K 线图 - 全宽 ============ */}
-      <Card title="K 线图 · 白线/黄线 · KDJ · MACD · 砖型图">
-        {klineData && <KlineChart data={klineData} height={780} />}
+      <Card title={`K 线图 · ${priceUnit}${market === 'CN' && analysis.asset_type !== 'index' ? ' · 前复权参考价' : ''} · 白线/黄线 · KDJ · MACD · 砖型图`}>
+        {klineData && <KlineChart data={klineData} market={market} height={780} />}
       </Card>
 
       {/* ============ Z哥点评 - Hero 全宽（位置：从右栏底部 → K线图下方） ============ */}
-      <CommentaryCard tsCode={tsCode} />
+      <CommentaryCard tsCode={tsCode} priceUnit={priceUnit} />
 
       {/* ============ Main 2-column Grid ============ */}
       <div className="grid grid-cols-12 gap-5">
         {/* Left: Indicators + Signals */}
         <div className="col-span-8 space-y-5">
           <Card title="技术指标">
-            <IndicatorPanel indicators={analysis.indicators} />
+            <IndicatorPanel indicators={analysis.indicators} priceUnit={priceUnit} />
           </Card>
           <Card title="战法信号">
-            <SignalTimeline signals={analysis.signals} />
+            <SignalTimeline signals={analysis.signals} priceUnit={priceUnit} />
           </Card>
         </div>
 

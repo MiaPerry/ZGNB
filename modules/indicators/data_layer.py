@@ -2,6 +2,7 @@ from copy import deepcopy
 from typing import Optional
 
 from modules.data_freshness import get_data_version
+from modules.database import get_db_path, get_market
 
 """
 技术指标数据层模块
@@ -67,8 +68,13 @@ except ImportError:
 # dotenv 加载已移至 modules/__init__.py（包级别一次性加载）
 
 # 指标缓存层（内存 + SQLite）
-_indicator_memory_cache: dict[tuple[str, str], IndicatorResult] = {}
-_indicator_cache_versions: dict[tuple[str, str], str] = {}
+_indicator_memory_cache: dict[tuple[str, str, str, str], IndicatorResult] = {}
+_indicator_cache_versions: dict[tuple[str, str, str, str], str] = {}
+
+
+def _indicator_cache_key(ts_code: str, trade_date: str) -> tuple[str, str, str, str]:
+    """持久基础指标与窗口无关，内存键仍须隔离工作空间和固定库路径。"""
+    return get_market(), str(get_db_path()), ts_code, trade_date
 
 # 持久化缓存中保存的基础指标字段：命中缓存时以这些字段为准（与分析窗口无关），
 # 其余扩展分析字段（sell_items、52周高点、MACD语义、砖形动作等）每次实时计算。
@@ -95,7 +101,7 @@ def _load_indicator_cache(ts_code: str, trade_date: str) -> IndicatorResult | No
         IndicatorResult 或 None（缓存未命中）
     """
     # 1. 先查内存缓存（按持久化数据版本校验，跨进程更新后自动失效）
-    mem_key = (ts_code, trade_date)
+    mem_key = _indicator_cache_key(ts_code, trade_date)
     version = get_data_version(ts_code)
     if mem_key in _indicator_memory_cache and _indicator_cache_versions.get(mem_key) == version:
         return deepcopy(_indicator_memory_cache[mem_key])
@@ -296,7 +302,7 @@ def _save_indicator_cache(result: IndicatorResult, klines: list[DailyData]) -> b
         conn.close()
 
         # 写入内存缓存
-        mem_key = (result.ts_code, result.trade_date)
+        mem_key = _indicator_cache_key(result.ts_code, result.trade_date)
         _indicator_memory_cache[mem_key] = result
         _indicator_cache_versions[mem_key] = get_data_version(result.ts_code)
         return True
@@ -305,10 +311,17 @@ def _save_indicator_cache(result: IndicatorResult, klines: list[DailyData]) -> b
         return False
 
 
-def clear_indicator_memory_cache():
-    """清空内存缓存（用于测试或数据更新后）"""
-    _indicator_memory_cache.clear()
-    _indicator_cache_versions.clear()
+def clear_indicator_memory_cache(ts_code=None):
+    """无参数保持清空语义；发布后仅清当前市场、库身份和指定标的。"""
+    if ts_code is None:
+        _indicator_memory_cache.clear()
+        _indicator_cache_versions.clear()
+        return
+    identity = get_market(), str(get_db_path()), ts_code
+    for cache in (_indicator_memory_cache, _indicator_cache_versions):
+        for key in list(cache):
+            if key[:3] == identity:
+                cache.pop(key, None)
 
 
 def get_kline_data(ts_code: str, days: int = 100) -> list[DailyData]:

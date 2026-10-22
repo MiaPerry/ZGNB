@@ -20,7 +20,7 @@ def generate_commentary(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"分析数据获取失败: {e}")
 
-    result = commentary_service.generate_commentary(analysis)
+    result = commentary_service.generate_commentary(analysis, days=days)
 
     if result.get("error") == "llm_not_configured":
         raise HTTPException(status_code=503, detail=result["commentary_text"])

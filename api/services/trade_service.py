@@ -2,6 +2,8 @@
 
 import logging
 
+from modules.database import validate_market_code
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,6 +47,8 @@ def parse_trade(text: str) -> dict:
 
     parser = TradeParser()
     result = parser.parse(text)
+    if result.data and "ts_code" in result.data:
+        validate_market_code(result.data["ts_code"])
     return {
         "success": result.success,
         "confidence": result.confidence,
@@ -69,6 +73,7 @@ def add_trade(text: str) -> dict:
             "missing_fields": parse_result.missing_fields,
         }
 
+    validate_market_code(parse_result.data.get("ts_code"))
     tm = TradeManager()
     record_id = tm.add_trade(parse_result.data)
     return {

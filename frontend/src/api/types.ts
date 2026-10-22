@@ -7,7 +7,7 @@ export interface ErrorResponse {
 }
 
 // ── 股票库 ──
-export type StockMarket = '美股' | '港股' | '美股指数';
+export type StockMarket = string;
 export type StockSort = 'ts_code' | 'pct_chg' | 'vol';
 export type StockDataStatus = 'all' | 'available' | 'missing';
 
@@ -23,6 +23,8 @@ export interface StockListParams {
 }
 
 export interface StockListItem {
+  asset_type: 'stock' | 'index' | 'unknown';
+  currency: 'CNY' | 'USD' | 'HKD';
   ts_code: string;
   name: string;
   market: StockMarket;
@@ -78,6 +80,8 @@ export interface StockImportSnapshot {
 
 // ── 股票分析 ──
 export interface StockAnalysis {
+  asset_type: 'stock' | 'index' | 'unknown';
+  currency: 'CNY' | 'USD' | 'HKD';
   ts_code: string;
   name: string;
   price: number;
@@ -163,6 +167,8 @@ export interface KirinInfo {
 
 // ── K 线图表 ──
 export interface KlineChart {
+  asset_type: 'stock' | 'index' | 'unknown';
+  currency: 'CNY' | 'USD' | 'HKD';
   ts_code: string;
   name: string;
   dates: string[];
@@ -259,6 +265,11 @@ export interface WatchlistScan {
 
 // ── 回测 ──
 export interface BacktestResult {
+  workspace_market: 'US' | 'CN';
+  simulation_mode: 'backtest' | 'strategy_simulation';
+  price_basis: 'source' | 'qfq';
+  assumptions: string[];
+  metric_unavailable_reasons: Record<string, string>;
   ts_code: string;
   summary: BacktestSummary;
   equity_curve: [string, number][];
@@ -270,17 +281,17 @@ export interface BacktestResult {
 
 export interface BacktestSummary {
   total_trades: number;
-  win_rate: number;
-  profit_factor: number;
-  total_return: number;
-  max_drawdown: number;
-  sharpe_ratio: number;
-  avg_holding_days: number;
-  annualized_return: number;
-  win_count: number;
-  avg_pnl: number;
-  max_win: number;
-  max_loss: number;
+  win_rate: number | null;
+  profit_factor: number | null;
+  total_return: number | null;
+  max_drawdown: number | null;
+  sharpe_ratio: number | null;
+  avg_holding_days: number | null;
+  annualized_return: number | null;
+  win_count: number | null;
+  avg_pnl: number | null;
+  max_win: number | null;
+  max_loss: number | null;
 }
 
 export interface BacktestTrade {

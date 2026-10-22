@@ -43,6 +43,36 @@ def test_status_counts_date_gaps_not_just_row_counts(db_conn):
     assert not item["ready"]
 
 
+def test_cn_heartbeat_only_updates_captured_database(temp_db, monkeypatch):
+    import time
+    from modules import data_freshness as module
+    from modules.database import get_connection, init_database, market_context
+
+    init_database("CN")
+    monkeypatch.setattr(module, "_HEARTBEAT_SECONDS", 0.01, raising=False)
+    with get_connection() as conn:
+        conn.execute("INSERT INTO sync_log(id,data_type,status,created_at) "
+                     "VALUES (1,'data_batch','running','1980-01-01')")
+    with market_context("CN"):
+        with module.data_update_batch():
+            with get_connection() as conn:
+                conn.execute("UPDATE sync_log SET created_at='1980-01-01' WHERE id=1")
+            deadline = time.monotonic() + 2
+            refreshed = False
+            while time.monotonic() < deadline:
+                with get_connection() as conn:
+                    refreshed = conn.execute("SELECT created_at FROM sync_log WHERE id=1").fetchone()[0] != "1980-01-01"
+                if refreshed:
+                    break
+                time.sleep(0.005)
+            assert refreshed, "CN心跳必须写入启动时的CN库"
+    with get_connection() as conn:
+        row = conn.execute("SELECT status,created_at FROM sync_log WHERE id=1").fetchone()
+        assert tuple(row) == ("running", "1980-01-01")
+    with get_connection("CN") as conn:
+        assert conn.execute("SELECT status FROM sync_log WHERE id=1").fetchone()[0] == "finished"
+
+
 def test_batch_finishes_on_exception_without_changing_data_version(temp_db):
     from modules.data_freshness import data_update_batch, get_data_status
 

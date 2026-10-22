@@ -16,6 +16,24 @@ import pytest
 from tests.conftest import write_klines_to_db, write_stock_basic
 
 
+@pytest.mark.parametrize("period", ["分钟", "小时"])
+def test_cn_free_frequency_limits_are_classified_as_rate_limit(period):
+    from api.services.sync_service import classify_error
+    from modules.tushare_client import TushareDataError, TushareClient
+    from unittest.mock import MagicMock
+
+    message = f"抱歉，您访问接口频率超限(1次/{period})"
+    assert classify_error(RuntimeError(message)) == "rate_limit"
+    client = TushareClient.__new__(TushareClient)
+    client._pro = MagicMock()
+    client._pro.adj_factor.side_effect = RuntimeError(message)
+    client._rate_limit = lambda: None
+    with pytest.raises(TushareDataError) as error:
+        client.get_adj_factor("600519.SH", "20211021", "20261021")
+    assert error.value.kind == "rate_limit"
+    assert "限频" in str(error.value)
+
+
 # ==================== 名单收集与市场过滤 ====================
 
 
@@ -58,6 +76,24 @@ def test_collect_codes_empty_db(temp_db):
     assert collect_us_hk_codes() == []
 
 
+def test_collect_workspace_codes_uses_cn_registered_assets(temp_db):
+    from api.services.sync_service import collect_workspace_codes
+    from modules.data_sync import register_cn_assets
+    from modules.database import get_connection, init_database, market_context
+
+    init_database("CN")
+    with market_context("CN"), get_connection() as conn:
+        register_cn_assets(conn, [
+            {"ts_code": "600519.SH", "name": "贵州茅台", "market": "主板", "asset_type": "stock",
+             "currency": "CNY", "sources": ["manual"]},
+            {"ts_code": "000300.SH", "name": "沪深300", "market": "指数", "asset_type": "index",
+             "currency": "CNY", "sources": ["reference"]},
+        ])
+        conn.execute("INSERT INTO stock_basic(ts_code,name,market) VALUES ('000001.SZ','未登记','主板')")
+    with market_context("CN"):
+        assert collect_workspace_codes() == ["000300.SH", "600519.SH"]
+
+
 # ==================== 各市场查询上界 ====================
 
 
@@ -86,6 +122,99 @@ def test_hk_end_date_after_close_uses_today():
 
 
 # ==================== 批量同步任务服务 ====================
+
+
+def test_cn_syncer_routes_to_atomic_cn_pipeline(monkeypatch):
+    from api.services.sync_service import CNSyncer
+    from modules import data_sync
+
+    client, lease, calls = object(), object(), []
+
+    def sync(client_arg, code, start_date, end_date, *, lease=None):
+        calls.append((client_arg, code, start_date, end_date, lease))
+        return {"new_rows": 4, "indicator_rows": 4}
+
+    monkeypatch.setattr(data_sync, "sync_cn_daily", sync)
+    monkeypatch.setattr(data_sync, "sync_indicator_cache_incremental",
+                        lambda code: (_ for _ in ()).throw(AssertionError("CN不得二次发布指标")))
+    adapter = CNSyncer(client=client, lease=lease)
+    assert adapter.atomic_indicators
+    assert adapter.sync_daily_kline("600519.SH", "20261001", "20261020", raise_on_error=True) == 4
+    assert adapter.sync_indicator_cache("600519.SH") == 4
+    assert calls == [(client, "600519.SH", "20261001", "20261020", lease)]
+
+
+def test_cn_atomic_indicator_stats_do_not_trigger_second_compute(temp_db, tmp_path):
+    class AtomicSyncer:
+        atomic_indicators = True
+
+        def sync_indicator_cache(self, code):
+            return 7
+
+    service = _make_service(AtomicSyncer(), tmp_path)
+    try:
+        assert service._fill_indicators(AtomicSyncer(), "AAPL.US", added=0) == 7
+    finally:
+        service._executor.shutdown(wait=True)
+
+
+def test_single_cn_sync_uses_atomic_adapter_and_bound_lease(temp_db, monkeypatch):
+    from api.services import sync_service
+    from api.services.sync_service import sync_workspace_stock
+    from modules.database import init_database, market_context
+    from modules.market_sync_lock import MarketSyncLease
+
+    init_database("CN")
+    calls = []
+
+    class Adapter:
+        def __init__(self, lease):
+            calls.append(("lease", lease))
+
+        def sync_daily_kline(self, code, start_date, end_date, raise_on_error):
+            calls.append((code, start_date, end_date, raise_on_error))
+            return 3
+
+    monkeypatch.setattr(sync_service, "CNSyncer", Adapter)
+    with market_context("CN"), MarketSyncLease.acquire("single-cn") as lease:
+        assert sync_workspace_stock("600519.SH", days=30, indicators=True, lease=lease,
+                                    now=datetime(2026, 9, 20, 10)) == 3
+    assert calls[0] == ("lease", lease)
+    assert calls[1] == ("600519.SH", "20260821", "20260918", True)
+
+
+@pytest.mark.parametrize("code,indicators", [("AAPL.US", True), ("00700.HK", False)])
+def test_single_us_sync_preserves_days_and_indicator_contract(temp_db, monkeypatch, code, indicators):
+    from api.services.sync_service import sync_workspace_stock
+    from modules import data_sync, yahoo_sync
+    from modules.database import get_market, get_db_path
+    from modules.market_sync_lock import MarketSyncLease
+
+    calls = []
+    monkeypatch.setattr(data_sync, "DataSyncer", lambda: pytest.fail("US单股同步不得初始化旧Tushare客户端"))
+    monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
+    monkeypatch.delenv("TUSHARE_API_URL", raising=False)
+    monkeypatch.setenv("DATA_MODE", "jnb")
+
+    def daily(ts_code, start_date, end_date, **kwargs):
+        assert get_market() == "US"
+        assert kwargs["incremental"] is True
+        calls.append(("daily", ts_code, start_date, end_date, str(get_db_path())))
+        return 2
+
+    def calculate(ts_code):
+        calls.append(("indicators", ts_code))
+        return 2
+
+    monkeypatch.setattr(yahoo_sync, "sync_us_daily", daily)
+    monkeypatch.setattr(data_sync, "sync_indicator_cache_incremental", calculate)
+    with MarketSyncLease.acquire("single-us") as lease:
+        assert sync_workspace_stock(code, days=30, indicators=indicators, lease=lease,
+                                    now=datetime(2026, 9, 20, 10)) == 2
+    expected = [("daily", code, "20260821", "20260918", str(get_db_path()))]
+    if indicators:
+        expected.append(("indicators", code))
+    assert calls == expected
 
 
 class FakeSyncer:
@@ -143,6 +272,77 @@ def _write_kline(conn, ts_code, trade_date):
         conn,
         [{"ts_code": ts_code, "trade_date": trade_date, "open": 1, "high": 1, "low": 1, "close": 1, "vol": 1, "amount": 1, "pct_chg": 0}],
     )
+
+
+def test_cn_batch_sync_uses_cn_adapter_and_registered_codes(temp_db, tmp_path, monkeypatch):
+    from api.services import sync_service
+    from api.services.sync_service import USStockSyncService
+    from modules.data_sync import register_cn_assets
+    from modules.database import get_connection, init_database, market_context
+    from modules.market_sync_lock import MarketSyncLease
+
+    init_database("CN")
+    fake = FakeSyncer(outcomes={"600519.SH": [1]})
+    leases = []
+
+    def adapter(*, lease):
+        assert isinstance(lease, MarketSyncLease)
+        leases.append(lease)
+        return fake
+
+    monkeypatch.setattr(sync_service, "CNSyncer", adapter)
+    with market_context("CN"), get_connection() as conn:
+        register_cn_assets(conn, [{"ts_code": "600519.SH", "name": "贵州茅台", "market": "主板",
+                                   "asset_type": "stock", "currency": "CNY", "sources": ["manual"]}])
+    with market_context("CN"):
+        service = USStockSyncService(now_provider=lambda: FIXED_NOW, backup_dir=tmp_path / "backups")
+    try:
+        _, final = _run_and_wait(service)
+        assert final.workspace_market == "CN" and final.success == 1
+        assert fake.daily_calls == [("600519.SH", "20240920", "20260918", True)]
+        _, repeated = _run_and_wait(service)
+        assert repeated.status == "completed"
+        assert len(leases) == 2, "每个CN任务必须绑定本次持有的有效锁"
+    finally:
+        service._executor.shutdown(wait=True)
+
+
+def test_sync_worker_pins_cn_identity_and_independent_lock(temp_db, tmp_path):
+    from modules.database import get_connection, get_db_path, get_market, init_database, market_context
+    from modules.market_sync_lock import MarketSyncLease
+
+    init_database("CN")
+    started, release = threading.Event(), threading.Event()
+    observed = []
+    with market_context("CN"):
+        cn_path = get_db_path()
+        service = _make_service(FakeSyncer(), tmp_path)
+
+    def probe():
+        observed.append((get_market(), get_db_path()))
+        started.set()
+        assert release.wait(5)
+        with get_connection() as conn:
+            conn.execute("INSERT INTO watchlist(ts_code,name) VALUES ('600519.SH','后台CN')")
+        service._update(status="completed", phase="done")
+
+    service._run_inner = probe
+    try:
+        with MarketSyncLease.acquire("us-running"):
+            first = service.submit()
+            assert started.wait(5)
+            assert service.submit().task_id == first.task_id
+            assert service.get_status().workspace_market == "CN"
+            release.set()
+            assert service.wait_for_completion(10)
+        assert observed == [("CN", cn_path)]
+        with get_connection() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM watchlist").fetchone()[0] == 0
+        with get_connection("CN") as conn:
+            assert conn.execute("SELECT name FROM watchlist").fetchone()[0] == "后台CN"
+    finally:
+        release.set()
+        service._executor.shutdown(wait=True)
 
 
 def test_incremental_start_from_max_trade_date(temp_db, db_conn, tmp_path):
@@ -287,6 +487,31 @@ def test_backup_created_before_sync(temp_db, db_conn, tmp_path):
     with sqlite3.connect(backup) as conn:
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert conn.execute("SELECT COUNT(*) FROM daily_kline").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("market,prefix,code", [("US", "us-hk", "AAPL.US"), ("CN", "cn", "600519.SH")])
+def test_sync_backup_labels_bound_market(temp_db, tmp_path, monkeypatch, market, prefix, code):
+    import sqlite3
+    from contextlib import closing
+    from api.services import sync_service
+    from modules.database import get_connection, init_database, market_context
+
+    if market == "CN":
+        init_database("CN")
+    monkeypatch.setattr(sync_service, "collect_workspace_codes", lambda: [code])
+    with market_context(market):
+        with get_connection() as conn:
+            conn.execute("INSERT INTO watchlist(ts_code,name) VALUES (?,?)", (code, market))
+        service = _make_service(FakeSyncer(outcomes={code: [1]}), tmp_path)
+    try:
+        _, final = _run_and_wait(service)
+        assert final.workspace_market == market
+        backups = list((tmp_path / "backups").glob(f"{prefix}-pre-sync-*.db"))
+        assert len(backups) == 1
+        with closing(sqlite3.connect(backups[0])) as conn:
+            assert conn.execute("SELECT ts_code,name FROM watchlist").fetchall() == [(code, market)]
+    finally:
+        service._executor.shutdown(wait=True)
 
 
 def test_backup_failure_aborts_before_any_write(temp_db, db_conn, tmp_path, monkeypatch):

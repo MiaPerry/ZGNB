@@ -12,6 +12,7 @@ class BatchSyncSnapshot(BaseModel):
     """A 股批量同步任务快照（前端轮询展示）"""
 
     task_id: str | None = None
+    workspace_market: str = "US"
     status: str = "idle"  # idle / running / completed / partial_failure / failed
     phase: str = "idle"  # idle / backup / sync / indicators / done
     current_code: str | None = None

@@ -1,9 +1,13 @@
 import { useCommentary } from '../../hooks/useStockAnalysis';
 import { useDataStatus } from '../../hooks/useDataStatus';
 import type { CommentaryResponse } from '../../api/types';
+import axios from 'axios';
+import { apiErrorMessage } from '../../api/client';
+import { renderCommentaryInline } from '../../lib/formatters';
 
 interface Props {
   tsCode: string;
+  priceUnit: string;
 }
 
 /**
@@ -64,41 +68,7 @@ function splitIntoSections(text: string): Section[] {
  *
  * 同时支持 **加粗**（金色加粗）
  */
-function renderInline(text: string): string {
-  // 1. 先抽出 **加粗**，用占位符保护避免被数字替换打散
-  const boldSegments: string[] = [];
-  let protectedText = text.replace(/\*\*(.+?)\*\*/g, (_m, p1) => {
-    const idx = boldSegments.length;
-    boldSegments.push(`<strong class="text-accent-gold font-bold">${p1}</strong>`);
-    return `\u0001BOLD${idx}\u0001`;
-  });
-
-  // 2. 把换行转成 <br/>
-  protectedText = protectedText.replace(/\n/g, '<br/>');
-
-  // 3. 百分比：xx.xx% / xx%  → 蓝色 badge
-  protectedText = protectedText.replace(
-    /([+\-]?\d+(?:\.\d+)?)%/g,
-    '<span class="inline-flex items-center px-1.5 py-0.5 mx-0.5 rounded font-mono tabular-nums text-[11px] font-bold bg-accent-cyan/15 text-accent-cyan border border-accent-cyan/30">$1%</span>'
-  );
-
-  // 4. 价格：2-3 位整数 + 小数点 + 2 位小数（如 95.39 / 72.48 / 102.40）→ 金色 ¥ badge
-  protectedText = protectedText.replace(
-    /(^|[^\d.%])(\d{2,3}\.\d{2})(?!\d)/g,
-    '$1<span class="inline-flex items-center px-1.5 py-0.5 mx-0.5 rounded font-mono tabular-nums text-[11px] font-bold bg-accent-gold/15 text-accent-gold border border-accent-gold/30">¥$2</span>'
-  );
-
-  // 5. 指标小数：整数.3+位小数（如 9.1518）→ 紫色 badge
-  protectedText = protectedText.replace(
-    /(^|[^\d.%])(\d+\.\d{3,})(?!\d)/g,
-    '$1<span class="inline-flex items-center px-1.5 py-0.5 mx-0.5 rounded font-mono tabular-nums text-[11px] font-bold bg-accent-purple/15 text-accent-purple border border-accent-purple/30">$2</span>'
-  );
-
-  // 6. 还原 **加粗**
-  protectedText = protectedText.replace(/\u0001BOLD(\d+)\u0001/g, (_m, idx) => boldSegments[Number(idx)]);
-
-  return protectedText;
-}
+// 数字高亮由 renderCommentaryInline 处理，保留原文单位而不猜测价格币种。
 
 function Skeleton() {
   return (
@@ -121,12 +91,13 @@ function Skeleton() {
   );
 }
 
-export default function CommentaryCard({ tsCode }: Props) {
+export default function CommentaryCard({ tsCode, priceUnit }: Props) {
   const { data, isLoading, isError, error, refetch, isFetching } = useCommentary(tsCode);
   const { data: dataStatus } = useDataStatus();
 
-  const isNotConfigured = (error as any)?.response?.status === 503;
-  const isFailed = (error as any)?.response?.status === 502;
+  const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+  const isNotConfigured = status === 503;
+  const isFailed = status === 502;
 
   // 点评绑定生成时的数据版本；标的版本变化后仅提示，不自动重新生成（付费调用）
   const currentVersion = dataStatus?.stocks?.[tsCode]?.version;
@@ -167,7 +138,7 @@ export default function CommentaryCard({ tsCode }: Props) {
               </span>
             </div>
             <div className="text-[10px] text-text-muted mt-0.5 tracking-wider uppercase">
-              Z哥量化 · 思维框架蒸馏
+              Z哥量化 · 思维框架蒸馏 · 标的价格单位 {priceUnit}
             </div>
           </div>
         </div>
@@ -223,7 +194,7 @@ export default function CommentaryCard({ tsCode }: Props) {
         {isError && !isNotConfigured && !isFailed && (
           <div className="text-sm text-accent-red text-center py-10">
             <div className="text-3xl mb-3 opacity-70">⚠️</div>
-            <div>加载失败</div>
+            <div>加载失败：{apiErrorMessage(error)}</div>
             <button
               onClick={() => refetch()}
               className="mt-4 text-xs text-accent-gold hover:underline"
@@ -291,7 +262,7 @@ function CommentaryBody({ data }: { data: CommentaryResponse }) {
             )}
             <div
               className="text-sm text-text-secondary leading-[1.85] pl-10 whitespace-pre-wrap tracking-wide"
-              dangerouslySetInnerHTML={{ __html: renderInline(section.body) }}
+              dangerouslySetInnerHTML={{ __html: renderCommentaryInline(section.body) }}
             />
           </div>
         ))}

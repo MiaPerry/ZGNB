@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
-from modules.database import get_connection, get_db_path
+from modules.database import get_connection, get_db_path, get_market, market_context
 from modules.data_freshness import data_update_batch
 from modules.indicators.cache_builder import missing_dates, write_indicator_rows
 from modules.market_sync_lock import MarketSyncLease, SyncBusyError
@@ -23,21 +23,47 @@ MAX_IMPORT_CODES = 50
 _TERMINAL_ITEMS = {"completed", "skipped", "failed", "interrupted"}
 
 
-def normalize_codes(text: str) -> list[str]:
-    """只接受股票代码；拒绝市场后缀、指数及路径等非普通美股输入。"""
+def normalize_codes(text: str, market: str | None = None) -> list[str]:
+    """按工作空间只接受普通股票标准代码，拒绝指数和其他市场输入。"""
+    selected = market or get_market()
     if not isinstance(text, str) or len(text) > 5000:
-        raise ValueError("请输入不超过 5000 字符的美股代码")
+        raise ValueError(f"请输入不超过 5000 字符的{selected}股票代码")
     codes = []
     for token in re.split(r"[\s,，]+", text.strip().upper()):
-        ticker = token.removesuffix(".US")
-        if not re.fullmatch(r"[A-Z][A-Z0-9]{0,9}(?:[.-][A-Z0-9])?", ticker) or ticker in {"SPX", "DJI", "IXIC"}:
-            raise ValueError(f"无效或不支持的美股代码：{token[:40] or '（空）'}")
-        code = ticker.replace(".", "-") + ".US"
+        if selected == "CN":
+            if not re.fullmatch(r"[0-9]{6}\.(?:SH|SZ)", token) or token == "000300.SH":
+                raise ValueError(f"无效或不支持的A股代码：{token[:40] or '（空）'}")
+            code = token
+        else:
+            ticker = token.removesuffix(".US")
+            if not re.fullmatch(r"[A-Z][A-Z0-9]{0,9}(?:[.-][A-Z0-9])?", ticker) or ticker in {"SPX", "DJI", "IXIC"}:
+                raise ValueError(f"无效或不支持的美股代码：{token[:40] or '（空）'}")
+            code = ticker.replace(".", "-") + ".US"
         if code not in codes:
             codes.append(code)
     if len(codes) > MAX_IMPORT_CODES:
         raise ValueError(f"每次最多添加 {MAX_IMPORT_CODES} 只股票")
     return codes
+
+
+def _verified_cn_metadata(client, code):
+    """只接受源端唯一、代码一致且具备普通股票基本资料的记录。"""
+    records = []
+    for status in ("L", "D", "P"):
+        frame = client.get_stock_basic(ts_code=code, list_status=status, raise_on_error=True)
+        if frame is None:
+            raise ValueError("A股基本资料接口未返回可验证结果")
+        for row in frame.to_dict("records"):
+            if row.get("ts_code") == code:
+                records.append({**row, "list_status": row.get("list_status") or status})
+    if len(records) != 1:
+        raise ValueError("A股代码未匹配到唯一普通股票资料")
+    row = records[0]
+    if not row.get("name") or not row.get("market"):
+        raise ValueError("A股基本资料不完整")
+    return {**row, "ts_code": code, "asset_type": "stock", "currency": "CNY",
+            "sources": ["manual"], "is_seed": False, "is_hs300": False,
+            "metadata_status": "complete"}
 
 
 def _summarize(job):
@@ -60,14 +86,26 @@ class StockImportService:
         sleep=time.sleep,
         now=_beijing_now,
         backup_dir=None,
+        market=None,
+        db_path=None,
+        cn_client=None,
+        cn_sync=None,
     ):
+        with market_context(market if market is not None else get_market(), db_path) as binding:
+            self.binding = binding
         self.fetch, self.compute, self.sleep, self.now = fetch, compute, sleep, now
+        self.cn_client, self.cn_sync = cn_client, cn_sync
         self.backup_dir = Path(backup_dir) if backup_dir else None
         self._mutex = threading.Lock()
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="stock-import")
         self._future = None
+        self._active_lease = None
 
     def get_status(self, task_id=None):
+        with market_context(self.binding.market, self.binding.db_path):
+            return self._get_status(task_id)
+
+    def _get_status(self, task_id=None):
         with get_connection() as conn:
             row = conn.execute(
                 "SELECT message FROM sync_log WHERE data_type='stock_import' "
@@ -80,6 +118,7 @@ class StockImportService:
                 raise KeyError("股票添加任务不存在")
             return {
                 "task_id": None,
+                "workspace_market": self.binding.market,
                 "status": "idle",
                 "phase": "idle",
                 "items": [],
@@ -91,6 +130,11 @@ class StockImportService:
                 "message": "",
             }
         job = json.loads(row[0])
+        # 旧US任务缺少身份字段时兼容；显式的异库归属不得被重标记或续作。
+        if (job.get("workspace_market", "US") != self.binding.market
+                or (job.get("db_path") and Path(job["db_path"]).resolve() != self.binding.db_path)):
+            raise ValueError("股票添加任务归属与当前数据库不一致")
+        job["workspace_market"] = self.binding.market
         if job["status"] == "running" and not MarketSyncLease.is_running(job["task_id"]):
             # 读取不写库；系统锁已释放而持久状态未结束，说明进程中断。
             job.update(status="interrupted", phase="done", message="任务已中断，可以重试未完成项")
@@ -100,7 +144,8 @@ class StockImportService:
         return _summarize(job)
 
     def submit(self, text):
-        return self._submit(normalize_codes(text))
+        with market_context(self.binding.market, self.binding.db_path):
+            return self._submit(normalize_codes(text, self.binding.market))
 
     def retry(self, task_id):
         previous = self.get_status(task_id)
@@ -112,6 +157,12 @@ class StockImportService:
         return self._submit([item["ts_code"] for item in items], previous=previous)
 
     def _submit(self, codes, previous=None):
+        with market_context(self.binding.market, self.binding.db_path):
+            return self._submit_bound(codes, previous)
+
+    def _submit_bound(self, codes, previous=None):
+        if normalize_codes(" ".join(codes), self.binding.market) != codes:
+            raise ValueError("股票添加任务包含非标准代码")
         with self._mutex:
             task_id = uuid.uuid4().hex
             parent = previous["task_id"] if previous else None
@@ -132,13 +183,14 @@ class StockImportService:
                     start = now.replace(year=now.year - 5).strftime("%Y%m%d")
                 except ValueError:
                     start = now.replace(year=now.year - 5, day=28).strftime("%Y%m%d")
-                with get_connection() as conn:
-                    earliest = conn.execute(
-                        "SELECT MIN(k.trade_date) FROM daily_kline k JOIN stock_basic s ON s.ts_code=k.ts_code "
-                        "WHERE s.market='美股' AND s.ts_code LIKE '%.US'"
-                    ).fetchone()[0]
-                if earliest:
-                    start = min(start, earliest)
+                if self.binding.market == "US":
+                    with get_connection() as conn:
+                        earliest = conn.execute(
+                            "SELECT MIN(k.trade_date) FROM daily_kline k JOIN stock_basic s ON s.ts_code=k.ts_code "
+                            "WHERE s.market='美股' AND s.ts_code LIKE '%.US'"
+                        ).fetchone()[0]
+                    if earliest:
+                        start = min(start, earliest)
                 items = [
                     {
                         "ts_code": code,
@@ -159,6 +211,8 @@ class StockImportService:
                         item.update(status="pending", message="")
                 job = {
                     "task_id": task_id,
+                    "workspace_market": self.binding.market,
+                    "db_path": str(self.binding.db_path),
                     "parent_id": parent,
                     "codes": codes,
                     "status": "running",
@@ -166,7 +220,7 @@ class StockImportService:
                     "message": "任务已启动",
                     "items": items,
                     "start_date": previous["start_date"] if previous else start,
-                    "end_date": previous["end_date"] if previous else compute_market_end_date(now, "US"),
+                    "end_date": previous["end_date"] if previous else compute_market_end_date(now, self.binding.market),
                     "started_at": datetime.now().isoformat(timespec="seconds"),
                     "finished_at": None,
                 }
@@ -195,10 +249,11 @@ class StockImportService:
             )
 
     def _run(self, job, lease):
-        with lease:
+        with lease, market_context(self.binding.market, self.binding.db_path):
+            self._active_lease = lease
             try:
                 dest = self.backup_dir or get_db_path().parent / "backups"
-                backup_database(dest / f"pre-stock-import-{job['task_id']}.db")
+                backup_database(dest / f"pre-stock-import-{self.binding.market}-{job['task_id']}.db")
                 with data_update_batch():
                     for index, item in enumerate(job["items"]):
                         try:
@@ -244,6 +299,8 @@ class StockImportService:
                     finished_at=datetime.now().isoformat(timespec="seconds"),
                 )
                 self._save(job)
+            finally:
+                self._active_lease = None
 
     @staticmethod
     def _stock_state(code):
@@ -258,6 +315,8 @@ class StockImportService:
 
     def _process(self, job, item):
         code = item["ts_code"]
+        if self.binding.market == "CN":
+            return self._process_cn(job, item)
         basic, bars, _, _ = self._stock_state(code)
         if (basic or bars[0]) and not item.get("owned"):
             item.update(status="skipped", message="已收录，未重复添加或覆盖；请使用日常更新")
@@ -296,6 +355,50 @@ class StockImportService:
             raise RuntimeError("行情与指标日期未完整对应")
         item.update(status="completed", indicator_rows=indicators, message="行情及指标已就绪")
 
+    def _process_cn(self, job, item):
+        from modules.data_sync import register_cn_assets, sync_cn_daily
+        from modules.tushare_client import TushareClient
+
+        code = item["ts_code"]
+        basic, bars, _, _ = self._stock_state(code)
+        with get_connection() as conn:
+            asset = conn.execute("SELECT 1 FROM cn_asset_metadata WHERE ts_code=?", (code,)).fetchone()
+        if (asset or bars[0]) and not item.get("owned"):
+            item.update(status="skipped", message="已收录，未重复添加或覆盖；请使用日常更新")
+            return
+        item.update(owned=True, status="downloading", message="核验基本资料并下载历史日线")
+        job["phase"] = "download"
+        self._save(job)
+        if not bars[0]:
+            client = self.cn_client or TushareClient()
+            metadata = _verified_cn_metadata(client, code)
+            basic_existed = basic is not None
+            with get_connection() as conn:
+                register_cn_assets(conn, [metadata])
+            try:
+                runner = self.cn_sync or sync_cn_daily
+                runner(client, code, job["start_date"], job["end_date"], lease=self._active_lease)
+            except Exception:
+                with get_connection() as conn:
+                    count = conn.execute("SELECT COUNT(*) FROM daily_kline WHERE ts_code=?", (code,)).fetchone()[0]
+                    if not count:
+                        conn.execute("DELETE FROM cn_asset_metadata WHERE ts_code=?", (code,))
+                        if not basic_existed:
+                            conn.execute("DELETE FROM stock_basic WHERE ts_code=?", (code,))
+                raise
+        basic, bars, _, _ = self._stock_state(code)
+        if not basic or not bars[0]:
+            raise ValueError("没有有效行情，未完成收录")
+        item.update(name=basic[0], rows=bars[0], first_date=bars[1], last_date=bars[2],
+                    status="indicators", message="核对全部行情与指标日期")
+        job["phase"] = "indicators"
+        self._save(job)
+        self.compute(code)
+        _, bars, indicators, missing = self._stock_state(code)
+        if missing or indicators != bars[0]:
+            raise RuntimeError("行情与指标日期未完整对应")
+        item.update(status="completed", indicator_rows=indicators, message="行情及指标已就绪")
+
     def wait_for_completion(self, timeout=30):
         if self._future:
             self._future.result(timeout=timeout)
@@ -305,13 +408,15 @@ class StockImportService:
         self._executor.shutdown(wait=True)
 
 
-_service = None
+_services: dict[tuple[str, Path], StockImportService] = {}
 _service_lock = threading.Lock()
 
 
-def get_stock_import_service():
-    global _service
-    with _service_lock:
-        if _service is None:
-            _service = StockImportService()
-        return _service
+def get_stock_import_service(market=None, db_path=None):
+    """固定实例与持久任务按市场/路径隔离，切换不改变运行中任务。"""
+    with market_context(market if market is not None else get_market(), db_path) as binding:
+        key = (binding.market, binding.db_path)
+        with _service_lock:
+            if key not in _services:
+                _services[key] = StockImportService(market=binding.market, db_path=binding.db_path)
+            return _services[key]

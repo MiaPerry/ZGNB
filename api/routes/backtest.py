@@ -25,6 +25,8 @@ def run_shaofu(req: BacktestRequest):
             take_profit_pct=req.take_profit_pct,
             position_pct=req.position_pct,
         )
+    except backtest_service.BacktestInputError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"回测失败: {e}")
 
@@ -41,6 +43,8 @@ def run_multi(req: MultiBacktestRequest):
             stop_loss_pct=req.stop_loss_pct,
             take_profit_pct=req.take_profit_pct,
         )
+    except backtest_service.BacktestInputError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"回测失败: {e}")
 
@@ -57,5 +61,7 @@ def run_portfolio(req: PortfolioBacktestRequest):
             stop_loss_pct=req.stop_loss_pct,
             take_profit_pct=req.take_profit_pct,
         )
+    except backtest_service.BacktestInputError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"回测失败: {e}")

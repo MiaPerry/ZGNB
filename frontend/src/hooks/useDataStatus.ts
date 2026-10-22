@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { fetchDataStatus } from '../api/sync';
-import { DATA_STATUS_KEY } from '../lib/syncLinkage';
+import { shouldRetryDataStatus } from '../api/client';
+import { DATA_STATUS_KEY, marketKey } from '../lib/syncLinkage';
+import { useAppStore } from '../stores/appStore';
 
 /**
  * 布局级数据状态观察入口：空闲每 30 秒检查一次数据版本与就绪状态；
@@ -8,11 +10,14 @@ import { DATA_STATUS_KEY } from '../lib/syncLinkage';
  * 多组件共享同一查询键，react-query 自动去重。
  */
 export function useDataStatus() {
+  const market = useAppStore((s) => s.currentMarket);
+  const initialized = useAppStore((s) => s.marketInitialized);
   return useQuery({
-    queryKey: DATA_STATUS_KEY,
-    queryFn: fetchDataStatus,
+    queryKey: marketKey(market, ...DATA_STATUS_KEY),
+    queryFn: ({ signal }) => fetchDataStatus(market, signal),
+    enabled: initialized,
     refetchInterval: 30000,
     staleTime: 10000,
-    retry: 1,
+    retry: shouldRetryDataStatus,
   });
 }
